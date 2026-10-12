@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- turning off notifications from your journal now also stops messages waiting in the app from posting a notification. this works even while your phone cannot reach your journal.
+
 ## [2.1.22] - 2026-10-09
 
 ### Fixed

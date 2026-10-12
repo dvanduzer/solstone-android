@@ -4,6 +4,7 @@
 package app.solstone.observer.phone
 
 import android.Manifest
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -18,11 +19,17 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import app.solstone.core.diagnostics.DiagnosticLogRead
 import app.solstone.core.identity.GraphRevisions
+import app.solstone.core.identity.ObtainResult
+import app.solstone.core.identity.PairingGeneration
 import app.solstone.core.identity.PairingGraphSnapshot
+import app.solstone.core.identity.PushKeyAccess
 import app.solstone.core.model.IdentityState
 import app.solstone.core.model.PairedHome
 import app.solstone.core.pl.browser.JournalBrowserLifecycleListener
 import app.solstone.core.pl.browser.JournalBrowserOrigin
+import app.solstone.core.push.PushEventSerial
+import app.solstone.core.push.PushMessageHandler
+import app.solstone.core.push.PushRegistrationCoordinator
 import app.solstone.platform.work.syncStores
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -36,6 +43,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class JournalOpenRuntimeTest {
@@ -66,6 +76,69 @@ class JournalOpenRuntimeTest {
     fun tearDown() {
         resetObserverRuntime()
         loadedUrls.clear()
+    }
+
+    @Test
+    fun queuedJournalPushDoesNotPostAfterTurnOff() {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val notificationId = 8510
+        fun pendingIntent(): PendingIntent? = PendingIntent.getActivity(
+            context, notificationId, JournalPushPoster.buildLaunchIntent(context, null),
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val directory = context.cacheDir.resolve("push-consent-post-fixture")
+        val keys = object : PushKeyAccess {
+            override fun readPushKey(generation: PairingGeneration): ByteArray? = null
+            override fun obtainPushKey(generation: PairingGeneration): ObtainResult = error("unused")
+        }
+        val coordinator = PushRegistrationCoordinator(
+            directory, null, true, keys, { null }, log = {}, enqueue = {},
+        )
+        val executor = Executors.newSingleThreadExecutor()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val handler = PushMessageHandler(
+            keys, { null }, coordinator.guardNotifier(JournalPushPoster(context)),
+            log = {}, drawId = { notificationId },
+        )
+        val serial = PushEventSerial(coordinator, handler, executor)
+        try {
+            manager.cancel(notificationId)
+            pendingIntent()?.cancel()
+            coordinator.setOwnerOn(true)
+            // Positive control: this permission/channel and real Android adapter can post.
+            handler.onMessage(byteArrayOf(), false)
+            waitUntil("fixture notification posted") { manager.activeNotifications.any { it.id == notificationId } }
+            assertNotNull(pendingIntent())
+            manager.cancel(notificationId)
+            pendingIntent()?.cancel()
+            waitUntil("fixture notification removed") { manager.activeNotifications.none { it.id == notificationId } }
+
+            val blocker = executor.submit { entered.countDown(); assertTrue(release.await(5, TimeUnit.SECONDS)) }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            serial.onMessage(byteArrayOf(), false)
+            coordinator.setOwnerOn(false)
+            release.countDown()
+            blocker.get(5, TimeUnit.SECONDS)
+            executor.submit {}.get(5, TimeUnit.SECONDS)
+            assertFalse(coordinator.ownerOn)
+            // Intent creation is synchronous; OS notification visibility can lag a post.
+            assertNull(pendingIntent())
+            assertTrue(manager.activeNotifications.none { it.id == notificationId })
+
+            coordinator.setOwnerOn(true)
+            serial.onMessage(byteArrayOf(), false)
+            executor.submit {}.get(5, TimeUnit.SECONDS)
+            waitUntil("fixture notification after enabling") { manager.activeNotifications.any { it.id == notificationId } }
+        } finally {
+            release.countDown()
+            serial.close()
+            executor.awaitTermination(5, TimeUnit.SECONDS)
+            coordinator.close()
+            manager.cancel(notificationId)
+            pendingIntent()?.cancel()
+            directory.deleteRecursively()
+        }
     }
 
     @Test

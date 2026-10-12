@@ -20,7 +20,7 @@ class PhonePushService : PushService() {
         val handler = PushMessageHandler(
             pushKeys = stores.pushKeys,
             pairingNow = { stores.identityMutator.currentPairingGeneration() },
-            notifier = JournalPushPoster(applicationContext),
+            notifier = coordinator.guardNotifier(JournalPushPoster(applicationContext)),
             log = { PhoneDiagLog.appendRaw(it) },
         )
         PushEventSerial(coordinator, handler)

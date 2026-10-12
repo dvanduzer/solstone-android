@@ -62,6 +62,15 @@ class PushRegistrationCoordinator(
 
     private fun activeLocked(): Boolean = enabled && memoryState.ownerOn
 
+    /** Orders the actual notification post with turn-off, including messages already queued. */
+    fun guardNotifier(notifier: PushNotifier): PushNotifier = PushNotifier { id, title, body, open ->
+        synchronized(lock) {
+            if (activeLocked()) {
+                notifier.post(id, title, body, open)
+            }
+        }
+    }
+
     private val listeners = CopyOnWriteArrayList<(PushDeliveryState) -> Unit>()
 
     private val job = CoalescingBoundedJob<PushPassSnapshot>(
