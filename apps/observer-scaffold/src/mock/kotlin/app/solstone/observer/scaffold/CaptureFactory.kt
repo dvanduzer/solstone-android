@@ -25,7 +25,11 @@ fun captureSourceIdentities(): List<CaptureSourceIdentity> = listOf(
     ),
 )
 
-fun createCaptureSetup(context: Context, cameraLock: CameraLock): CaptureSetup {
+fun createCaptureSetup(
+    context: Context,
+    cameraLock: CameraLock,
+    registerScreenSource: Boolean = false,
+): CaptureSetup {
     val audio = FakeContinuousSource(
         sourceId = "audio",
         stream = MAIN_STREAM,

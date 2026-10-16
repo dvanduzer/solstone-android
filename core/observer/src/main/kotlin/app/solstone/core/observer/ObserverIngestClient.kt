@@ -52,8 +52,17 @@ class ObserverIngestClient(
         host: String?,
         platform: String?,
     ): ByteArray {
-        val out = ByteArrayOutputStream()
-        out.writeJsonPart(boundary, "envelope", buildEnvelope(manifest, sourceId, host, platform))
+        val envelope = buildEnvelope(manifest, sourceId, host, platform)
+        // Reserve payloads and framing together. Otherwise the final CRLF can double a
+        // video-sized backing buffer, which also coexists with toByteArray's copy.
+        val framingBytes = 1024L + envelope.toByteArray(Charsets.UTF_8).size +
+            2L * boundary.toByteArray(Charsets.UTF_8).size + manifest.files.sumOf {
+                256L + quoteFilename(it.name).toByteArray(Charsets.UTF_8).size +
+                    it.mediaType.toByteArray(Charsets.UTF_8).size + boundary.toByteArray(Charsets.UTF_8).size
+            }
+        val capacity = Math.toIntExact(manifest.files.sumOf { it.byteSize } + framingBytes)
+        val out = ByteArrayOutputStream(capacity)
+        out.writeJsonPart(boundary, "envelope", envelope)
         for (file in manifest.files) {
             out.writeFilePart(boundary, "files", file.name, file.mediaType, fileBytes(file))
         }

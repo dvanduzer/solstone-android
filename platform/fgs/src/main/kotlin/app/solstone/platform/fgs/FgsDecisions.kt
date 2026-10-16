@@ -9,10 +9,14 @@ import app.solstone.core.model.SourceState
 enum class CaptureForegroundType {
     MICROPHONE,
     LOCATION,
-    CAMERA;
+    CAMERA,
+    MEDIA_PROJECTION;
 
     val token: String
-        get() = name.lowercase()
+        get() = when (this) {
+            MEDIA_PROJECTION -> "mediaProjection"
+            else -> name.lowercase()
+        }
 }
 
 sealed interface MaskNarrowResult {
@@ -67,6 +71,7 @@ fun satisfiableCaptureForegroundTypes(
     cameraGranted: Boolean,
     locationGranted: Boolean,
     declared: Set<CaptureForegroundType>,
+    mediaProjectionPromotable: Boolean = false,
 ): Set<CaptureForegroundType> {
     val result = linkedSetOf<CaptureForegroundType>()
     if (CaptureForegroundType.MICROPHONE in declared && microphoneGranted) {
@@ -77,6 +82,9 @@ fun satisfiableCaptureForegroundTypes(
     }
     if (CaptureForegroundType.CAMERA in declared && cameraGranted) {
         result += CaptureForegroundType.CAMERA
+    }
+    if (CaptureForegroundType.MEDIA_PROJECTION in declared && mediaProjectionPromotable) {
+        result += CaptureForegroundType.MEDIA_PROJECTION
     }
     return result
 }
@@ -95,6 +103,7 @@ fun effectiveCapturePlan(
     declared: Set<CaptureForegroundType>,
     wishedOn: Set<CaptureForegroundType>? = null,
     liveHeld: Set<CaptureForegroundType>? = null,
+    mediaProjectionPromotable: Boolean = false,
 ): EffectiveCapturePlan {
     if (wishedOn == null) {
         val satisfiable = satisfiableCaptureForegroundTypes(
@@ -102,6 +111,7 @@ fun effectiveCapturePlan(
             cameraGranted = cameraGranted,
             locationGranted = locationGranted,
             declared = declared,
+            mediaProjectionPromotable = mediaProjectionPromotable,
         )
         return EffectiveCapturePlan(
             types = satisfiable,
@@ -115,6 +125,7 @@ fun effectiveCapturePlan(
         cameraGranted = cameraGranted,
         locationGranted = locationGranted,
         declared = declared,
+        mediaProjectionPromotable = mediaProjectionPromotable,
     )
     val types = linkedSetOf<CaptureForegroundType>()
     if (CaptureForegroundType.MICROPHONE in satisfiable && CaptureForegroundType.MICROPHONE in wishedOn) {
@@ -125,6 +136,9 @@ fun effectiveCapturePlan(
     }
     if (CaptureForegroundType.CAMERA in satisfiable && CaptureForegroundType.CAMERA in wishedOn) {
         types += CaptureForegroundType.CAMERA
+    }
+    if (CaptureForegroundType.MEDIA_PROJECTION in satisfiable && CaptureForegroundType.MEDIA_PROJECTION in wishedOn) {
+        types += CaptureForegroundType.MEDIA_PROJECTION
     }
     val endSession = types.isEmpty()
     val missingFromHeld = if (liveHeld != null && !endSession) {
@@ -145,6 +159,7 @@ fun captureForegroundTypeForSourceId(sourceId: String): CaptureForegroundType? =
         "audio", "microphone" -> CaptureForegroundType.MICROPHONE
         "location" -> CaptureForegroundType.LOCATION
         "camera" -> CaptureForegroundType.CAMERA
+        "screen" -> CaptureForegroundType.MEDIA_PROJECTION
         else -> null
     }
 
@@ -154,6 +169,7 @@ fun captureForegroundTypesFromTokens(tokens: Set<String>): Set<CaptureForeground
             "microphone" -> CaptureForegroundType.MICROPHONE
             "location" -> CaptureForegroundType.LOCATION
             "camera" -> CaptureForegroundType.CAMERA
+            "mediaprojection" -> CaptureForegroundType.MEDIA_PROJECTION
             else -> null
         }
     }.toSet()

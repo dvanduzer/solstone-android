@@ -12,10 +12,9 @@ package app.solstone.observer.formfactor.phone
  *
  * ⚠ **`camera` was excluded, and that was a transcription gap rather than a ruling.**
  * Both the cross-platform contract's § 2.4 and the Android bible's § 4.2 state the rule
- * as an enumeration — *"audio, screen and location carry switches"* — and that list is
- * **iOS's source set**. Android has no `screen` source and iOS has no `camera` one, so
- * reading a list written for the other platform silently dropped the one source the
- * sentence never had a chance to name.
+ * as an enumeration — *"audio, screen and location carry switches"* — and that list was
+ * historically read against platforms with differing source sets; iOS had no `camera` source.
+ * Both camera and screen run on-device and carry honest switches.
  *
  * ✅ Camera is registered in `CaptureFactory` with the same `SourceRegistration`, the
  * same `SourceWish` store and the same engine contract as audio and location, so the
@@ -24,4 +23,4 @@ package app.solstone.observer.formfactor.phone
  * its detail view. That is the wrong side of § 2.4 to err on.
  */
 fun sourceEarnsSwitch(sourceId: String): Boolean =
-    sourceId == "audio" || sourceId == "location" || sourceId == "camera"
+    sourceId == "audio" || sourceId == "location" || sourceId == "camera" || sourceId == "screen"

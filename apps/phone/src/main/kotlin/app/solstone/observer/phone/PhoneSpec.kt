@@ -25,7 +25,7 @@ import app.solstone.core.pl.DirectEndpoint as PlDirectEndpoint
 import app.solstone.platform.pl.transport.conscrypt.openAuthenticatedClient
 import app.solstone.platform.pl.transport.conscrypt.openRelaySyncClient
 
-val PHONE_DECLARED_CAPTURE_FOREGROUND_TYPES = setOf("microphone", "location", "camera")
+val PHONE_DECLARED_CAPTURE_FOREGROUND_TYPES = setOf("microphone", "location", "camera", "mediaProjection")
 
 val phoneSpec = FormFactorSpec(
     stream = PHONE_STREAM,
@@ -37,6 +37,7 @@ val phoneSpec = FormFactorSpec(
     ownerTextStyle = ::phoneOwnerTextStyle,
     declaredCaptureForegroundTypes = PHONE_DECLARED_CAPTURE_FOREGROUND_TYPES,
     matchForegroundTypesToWishes = true,
+    registerScreenSource = true,
     permissions = { sdkInt ->
         if (sdkInt >= 33) {
             arrayOf(

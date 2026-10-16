@@ -67,6 +67,7 @@ class PhoneDeckSourceCheckTest {
                 "audio" to "audio",
                 "location" to "location",
                 "camera" to "camera",
+                "screen" to "screen",
             ),
             phoneSourceLabels,
         )

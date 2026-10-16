@@ -157,4 +157,47 @@ class CaptureRestartSequencerTest {
         }
     }
 
+    @Test
+    fun screenSessionLiveDoesNotCallStopPipelineOrStopForeground() {
+        val events = mutableListOf<String>()
+        val sequencer = CaptureRestartSequencer(
+            stopPipeline = { events += "stopPipeline" },
+            stopForeground = { events += "stopForeground" },
+            startServiceAndPipeline = { events += "startServiceAndPipeline" },
+            destroySeam = { true },
+            isDesiredOn = { true },
+            isVisibleOwnerPresent = { true },
+            screenSessionLive = { true },
+            refreshWithoutStoppingService = { events += "refreshWithoutStoppingService" },
+        )
+
+        val result = sequencer.requestRestart()
+        assertTrue(result)
+        assertEquals(listOf("refreshWithoutStoppingService"), events)
+    }
+
+    @Test
+    fun screenSessionLiveReturnsFalseWithoutRefreshWhenNotDesiredOrNotVisible() {
+        val events = mutableListOf<String>()
+        var desiredOn = false
+        var visible = true
+        val sequencer = CaptureRestartSequencer(
+            stopPipeline = { events += "stopPipeline" },
+            stopForeground = { events += "stopForeground" },
+            startServiceAndPipeline = { events += "startServiceAndPipeline" },
+            destroySeam = { true },
+            isDesiredOn = { desiredOn },
+            isVisibleOwnerPresent = { visible },
+            screenSessionLive = { true },
+            refreshWithoutStoppingService = { events += "refreshWithoutStoppingService" },
+        )
+
+        assertFalse(sequencer.requestRestart())
+        assertTrue(events.isEmpty())
+
+        desiredOn = true
+        visible = false
+        assertFalse(sequencer.requestRestart())
+        assertTrue(events.isEmpty())
+    }
 }

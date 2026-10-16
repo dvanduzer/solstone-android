@@ -15,6 +15,8 @@ class CaptureRestartSequencer(
     private val isDesiredOn: () -> Boolean,
     private val isVisibleOwnerPresent: () -> Boolean,
     private val timeoutMs: Long = 5_000L,
+    private val screenSessionLive: () -> Boolean = { false },
+    private val refreshWithoutStoppingService: () -> Unit = {},
 ) {
     private val lock = Any()
     private var generation = 0L
@@ -24,6 +26,11 @@ class CaptureRestartSequencer(
     }
 
     fun requestRestart(): Boolean {
+        if (screenSessionLive()) {
+            if (!isDesiredOn() || !isVisibleOwnerPresent()) return false
+            refreshWithoutStoppingService()
+            return true
+        }
         val gen = synchronized(lock) {
             if (!isDesiredOn() || !isVisibleOwnerPresent()) return false
             val requested = ++generation

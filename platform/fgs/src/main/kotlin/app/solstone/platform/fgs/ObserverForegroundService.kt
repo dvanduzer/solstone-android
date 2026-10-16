@@ -15,7 +15,10 @@ import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.ServiceCompat
 import app.solstone.core.model.ReasonCode
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+
+data class ScreenConsentToken(val resultCode: Int, val data: Intent, val generation: Long)
 
 class ObserverForegroundService : Service() {
     private val handler = Handler(Looper.getMainLooper())
@@ -46,44 +49,178 @@ class ObserverForegroundService : Service() {
             if (permissions.cameraGranted) add(CaptureForegroundType.CAMERA)
         }
 
+        val consentGen = if (intent != null && intent.hasExtra(EXTRA_SCREEN_CONSENT)) {
+            intent.getLongExtra(EXTRA_SCREEN_CONSENT, -1L)
+        } else null
+        val heldToken = screenConsentToken
+        val isConsentHandoff = consentGen != null && heldToken != null && consentGen == heldToken.generation
+
+        var screenPromotedThisStart = false
+        if (isConsentHandoff) {
+            val storageOk = screenStorageOkCheck?.invoke() ?: true
+            if (!storageOk) {
+                clearScreenConsent()
+                sessionPromotable.set(false)
+                onScreenStorageBlocked?.invoke()
+            } else {
+                screenPromotedThisStart = true
+                sessionPromotable.set(true)
+            }
+        }
+        val promotable = isSessionPromotable()
+
         val wishSupplier = captureWishTypes
         val rawWished = wishSupplier?.invoke()
-        val wished = if (widgetSourceId != null && rawWished != null) {
+        val baseWished = if (widgetSourceId != null && rawWished != null) {
             captureForegroundTypeForSourceId(widgetSourceId)?.let { rawWished + it } ?: rawWished
         } else {
             rawWished
         }
+        val wished = if (promotable) {
+            if (baseWished != null) baseWished + CaptureForegroundType.MEDIA_PROJECTION
+            else setOf(CaptureForegroundType.MEDIA_PROJECTION)
+        } else {
+            baseWished
+        }
 
-        if (wishSupplier != null || widgetSourceId != null) {
-            val effectivePlan = effectiveCapturePlan(
-                microphoneGranted = permissions.microphoneGranted,
-                cameraGranted = permissions.cameraGranted,
-                locationGranted = permissions.locationGranted,
-                declared = declared,
-                wishedOn = wished,
-                liveHeld = heldCaptureForegroundTypes,
-            )
+        try {
+            if (wishSupplier != null || widgetSourceId != null || promotable) {
+                val effectivePlan = effectiveCapturePlan(
+                    microphoneGranted = permissions.microphoneGranted,
+                    cameraGranted = permissions.cameraGranted,
+                    locationGranted = permissions.locationGranted,
+                    declared = declared,
+                    wishedOn = wished,
+                    liveHeld = heldCaptureForegroundTypes,
+                    mediaProjectionPromotable = promotable,
+                )
 
-            if (effectivePlan.types.isEmpty()) {
-                if (heldCaptureForegroundTypes != null) {
-                    removeForegroundNotification()
+                if (effectivePlan.types.isEmpty()) {
+                    if (heldCaptureForegroundTypes != null) {
+                        removeForegroundNotification()
+                    }
+                    stopSelf()
+                    return START_STICKY
                 }
-                stopSelf()
-                return START_STICKY
-            }
 
-            val liveHeldTypes = heldCaptureForegroundTypes
-            if (liveHeldTypes != null) {
-                if (effectivePlan.types != liveHeldTypes) {
-                    val narrow = narrowRunningMask(effectivePlan.types)
-                    if (narrow !is MaskNarrowResult.Applied) {
+                val liveHeldTypes = heldCaptureForegroundTypes
+                if (liveHeldTypes != null) {
+                    if (effectivePlan.types != liveHeldTypes) {
+                        val narrow = narrowRunningMask(effectivePlan.types)
+                        if (narrow !is MaskNarrowResult.Applied) {
+                            removeForegroundNotification()
+                            stopSelf()
+                            return START_STICKY
+                        }
+                    }
+                    if (screenPromotedThisStart && heldToken != null) {
+                        var started = false
+                        try {
+                            started = screenSessionStarter?.startSession(this, heldToken) ?: false
+                        } catch (_: Throwable) {
+                            started = false
+                        }
+                        if (!started) {
+                            screenSessionStopper?.invoke()
+                            sessionPromotable.set(false)
+                            if (effectivePlan.types.none { it != CaptureForegroundType.MEDIA_PROJECTION }) {
+                                removeForegroundNotification()
+                                stopSelf()
+                                return START_STICKY
+                            } else {
+                                val remaining = effectivePlan.types.filter { it != CaptureForegroundType.MEDIA_PROJECTION }.toSet()
+                                narrowRunningMask(remaining)
+                            }
+                        } else {
+                            onScreenSessionStarted?.invoke()
+                        }
+                    }
+                    val plan = onStartCommandPlan(hasIntent = intent != null, hasRehydrator = hook != null, subsetEmpty = false)
+                    refreshOngoingNotification(this, needsAttention = plan.initialNeedsAttention)
+                    if (!plan.stopSelf) {
+                        cancelAttentionNotification(this)
+                    }
+                    dispatchLifecycle("fgs phase=start startId=$startId flags=$flags intent=${intent != null}")
+                    refreshHeartbeat()
+                    if (plan.dispatchRehydrate) {
+                        dispatchRehydrate(hook)
+                    }
+                    widgetSourceId?.let(::dispatchWidgetStartAccepted)
+                    if (isIntakeStart && widgetSourceId == null) {
+                        intakeStartHandler?.invoke()
+                    }
+                    if (plan.postAttentionOn102) {
+                        postAttentionNotification(this)
+                    }
+                    if (plan.stopSelf) {
                         removeForegroundNotification()
                         stopSelf()
-                        return START_STICKY
+                    }
+                    return START_STICKY
+                }
+
+                val subset = effectivePlan.types
+                dispatchLifecycle(typesDiagLine(granted = granted, declared = declared, subset = subset))
+                val plan = onStartCommandPlan(
+                    hasIntent = intent != null,
+                    hasRehydrator = hook != null,
+                    subsetEmpty = false,
+                )
+                try {
+                    ServiceCompat.startForeground(
+                        this,
+                        ObserverNotification.SERVICE_NOTIFICATION_ID,
+                        ObserverNotification.ongoing(
+                            this,
+                            needsAttention = plan.initialNeedsAttention,
+                            decorate = true,
+                            requestPromotion = true,
+                            initialForegroundEntry = true,
+                        ),
+                        captureForegroundTypeMask(subset),
+                    )
+                    heldCaptureForegroundTypes = subset
+                    dispatchForegroundChanged(true)
+                } catch (e: SecurityException) {
+                    handleStartFailure(this, e.javaClass.simpleName)
+                    widgetSourceId?.let { dispatchWidgetStartRefused(it, ReasonCode.PERMISSION_REVOKED) }
+                    stopSelf()
+                    return START_STICKY
+                } catch (e: IllegalArgumentException) {
+                    handleStartFailure(this, e.javaClass.simpleName)
+                    widgetSourceId?.let { dispatchWidgetStartRefused(it, ReasonCode.PERMISSION_REVOKED) }
+                    stopSelf()
+                    return START_STICKY
+                } catch (e: RuntimeException) {
+                    handleStartFailure(this, e.javaClass.simpleName)
+                    val reason = widgetRefusalReasonForStartException(e.javaClass.simpleName)
+                    widgetSourceId?.let { dispatchWidgetStartRefused(it, reason) }
+                    stopSelf()
+                    return START_STICKY
+                }
+
+                if (screenPromotedThisStart && heldToken != null) {
+                    var started = false
+                    try {
+                        started = screenSessionStarter?.startSession(this, heldToken) ?: false
+                    } catch (_: Throwable) {
+                        started = false
+                    }
+                    if (!started) {
+                        screenSessionStopper?.invoke()
+                        sessionPromotable.set(false)
+                        if (subset.none { it != CaptureForegroundType.MEDIA_PROJECTION }) {
+                            removeForegroundNotification()
+                            stopSelf()
+                            return START_STICKY
+                        } else {
+                            val remaining = subset.filter { it != CaptureForegroundType.MEDIA_PROJECTION }.toSet()
+                            narrowRunningMask(remaining)
+                        }
+                    } else {
+                        onScreenSessionStarted?.invoke()
                     }
                 }
-                val plan = onStartCommandPlan(hasIntent = intent != null, hasRehydrator = hook != null, subsetEmpty = false)
-                refreshOngoingNotification(this, needsAttention = plan.initialNeedsAttention)
                 if (!plan.stopSelf) {
                     cancelAttentionNotification(this)
                 }
@@ -105,66 +242,10 @@ class ObserverForegroundService : Service() {
                 }
                 return START_STICKY
             }
-
-            val subset = effectivePlan.types
-            dispatchLifecycle(typesDiagLine(granted = granted, declared = declared, subset = subset))
-            val plan = onStartCommandPlan(
-                hasIntent = intent != null,
-                hasRehydrator = hook != null,
-                subsetEmpty = false,
-            )
-            try {
-                ServiceCompat.startForeground(
-                    this,
-                    ObserverNotification.SERVICE_NOTIFICATION_ID,
-                    ObserverNotification.ongoing(
-                        this,
-                        needsAttention = plan.initialNeedsAttention,
-                        decorate = true,
-                        requestPromotion = true,
-                        initialForegroundEntry = true,
-                    ),
-                    captureForegroundTypeMask(subset),
-                )
-                heldCaptureForegroundTypes = subset
-                dispatchForegroundChanged(true)
-            } catch (e: SecurityException) {
-                handleStartFailure(this, e.javaClass.simpleName)
-                widgetSourceId?.let { dispatchWidgetStartRefused(it, ReasonCode.PERMISSION_REVOKED) }
-                stopSelf()
-                return START_STICKY
-            } catch (e: IllegalArgumentException) {
-                handleStartFailure(this, e.javaClass.simpleName)
-                widgetSourceId?.let { dispatchWidgetStartRefused(it, ReasonCode.PERMISSION_REVOKED) }
-                stopSelf()
-                return START_STICKY
-            } catch (e: RuntimeException) {
-                handleStartFailure(this, e.javaClass.simpleName)
-                val reason = widgetRefusalReasonForStartException(e.javaClass.simpleName)
-                widgetSourceId?.let { dispatchWidgetStartRefused(it, reason) }
-                stopSelf()
-                return START_STICKY
+        } finally {
+            if (isConsentHandoff) {
+                clearScreenConsent()
             }
-            if (!plan.stopSelf) {
-                cancelAttentionNotification(this)
-            }
-            dispatchLifecycle("fgs phase=start startId=$startId flags=$flags intent=${intent != null}")
-            refreshHeartbeat()
-            if (plan.dispatchRehydrate) {
-                dispatchRehydrate(hook)
-            }
-            widgetSourceId?.let(::dispatchWidgetStartAccepted)
-            if (isIntakeStart && widgetSourceId == null) {
-                intakeStartHandler?.invoke()
-            }
-            if (plan.postAttentionOn102) {
-                postAttentionNotification(this)
-            }
-            if (plan.stopSelf) {
-                removeForegroundNotification()
-                stopSelf()
-            }
-            return START_STICKY
         }
 
         val liveHeldTypes = heldCaptureForegroundTypes
@@ -198,6 +279,7 @@ class ObserverForegroundService : Service() {
             cameraGranted = permissions.cameraGranted,
             locationGranted = permissions.locationGranted,
             declared = declared,
+            mediaProjectionPromotable = promotable,
         )
         dispatchLifecycle(typesDiagLine(granted = granted, declared = declared, subset = subset))
         val plan = onStartCommandPlan(
@@ -269,6 +351,9 @@ class ObserverForegroundService : Service() {
         dispatchLifecycle("fgs phase=destroy")
         runningInstance = null
         heldCaptureForegroundTypes = null
+        sessionPromotable.set(false)
+        screenSessionStopper?.invoke()
+        clearScreenConsent()
         // ⚠ stopService is asynchronous. A refresh that ran on this thread between the stop and
         // now passed its check and posted 101; if that post reaches the system after it has
         // cancelled the foreground notification, 101 comes back unowned and says the observer is
@@ -294,6 +379,30 @@ class ObserverForegroundService : Service() {
     }
 
     companion object {
+
+        fun interface ScreenSessionStarter {
+            fun startSession(service: ObserverForegroundService, token: ScreenConsentToken): Boolean
+        }
+
+        @Volatile var screenConsentToken: ScreenConsentToken? = null
+        val sessionPromotable = AtomicBoolean(false)
+        fun isSessionPromotable(): Boolean = sessionPromotable.get()
+        @Volatile var isScreenSessionLive: () -> Boolean = { false }
+        @Volatile var screenStorageOkCheck: (() -> Boolean)? = null
+        @Volatile var onScreenStorageBlocked: (() -> Unit)? = null
+        @Volatile var onScreenSessionStarted: (() -> Unit)? = null
+        @Volatile var onScreenSessionEnded: (() -> Unit)? = null
+        @Volatile var screenSessionStarter: ScreenSessionStarter? = null
+        @Volatile var screenSessionStopper: (() -> Unit)? = null
+
+        fun offerScreenConsent(token: ScreenConsentToken) {
+            screenConsentToken = token
+        }
+
+        fun clearScreenConsent() {
+            screenConsentToken = null
+        }
+
         private const val HEARTBEAT_INTERVAL_MS = 5_000L
         private const val START_GRACE_NANOS = 5_000_000_000L
         private const val ATTENTION_CONTENT_REQUEST_CODE = 102
@@ -334,6 +443,7 @@ class ObserverForegroundService : Service() {
             return result
         }
 
+        const val EXTRA_SCREEN_CONSENT = "app.solstone.platform.fgs.extra.SCREEN_CONSENT"
         const val EXTRA_REFRESH_RUNNING_CAPTURE_TYPES = "app.solstone.platform.fgs.extra.REFRESH_RUNNING_CAPTURE_TYPES"
 
         fun refreshRunningCaptureTypes(context: Context) {
@@ -432,6 +542,11 @@ class ObserverForegroundService : Service() {
             }
             if (CaptureForegroundType.CAMERA in types) {
                 mask = mask or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            }
+            if (CaptureForegroundType.MEDIA_PROJECTION in types) {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    mask = mask or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                }
             }
             return mask
         }

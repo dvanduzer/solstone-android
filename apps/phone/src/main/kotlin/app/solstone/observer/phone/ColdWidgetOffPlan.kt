@@ -57,6 +57,7 @@ fun performAudioOff(
     commitDesiredOff: () -> Boolean,
     publishNotice: (ReasonCode) -> Unit,
     clearNotice: () -> Unit,
+    mediaProjectionPromotable: Boolean = false,
 ) {
     val (outcome, wishesNow) = if (commitThroughRegistry != null) {
         val commit = commitThroughRegistry()
@@ -101,6 +102,7 @@ fun performAudioOff(
         declared = declared,
         wishedOn = wishedOn,
         liveHeld = null,
+        mediaProjectionPromotable = mediaProjectionPromotable,
     )
 
     if (plan.endSession) {

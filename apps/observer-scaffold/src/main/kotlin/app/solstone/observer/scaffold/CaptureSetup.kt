@@ -20,4 +20,6 @@ data class CaptureSetup(
     val storageOk: () -> Boolean = { true },
     val inFlightAudioIds: () -> Set<String> = { emptySet() },
     val recoverAudio: (Path, SegmentDao, UnresolvedInterruption, Set<String>) -> Unit = { _, _, _, _ -> },
+    val inFlightScreenIds: () -> Set<String> = { emptySet() },
+    val recoverScreen: (Path, SegmentDao, UnresolvedInterruption, Set<String>) -> Unit = { _, _, _, _ -> },
 )

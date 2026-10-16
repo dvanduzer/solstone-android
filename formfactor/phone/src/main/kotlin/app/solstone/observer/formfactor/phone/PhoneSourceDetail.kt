@@ -113,6 +113,7 @@ private fun reasonAction(reason: ReasonCode): SourceDetailAction? = when (reason
     ReasonCode.AUDIO_CHOICE_SAVED_STOP_NOT_DURABLE,
     ReasonCode.INTAKE_STOPPED_UNEXPECTEDLY,
     ReasonCode.MICROPHONE_SILENCED,
+    ReasonCode.SCREEN_CAPTURE_FAILED,
     ReasonCode.DESIRED_OFF,
     ReasonCode.NONE -> null
 }
@@ -134,6 +135,7 @@ private fun reasonRetryIsHonest(reason: ReasonCode): Boolean = when (reason) {
     ReasonCode.AUDIO_CHOICE_SAVED_STOP_NOT_DURABLE,
     ReasonCode.INTAKE_STOPPED_UNEXPECTEDLY,
     ReasonCode.MICROPHONE_SILENCED,
+    ReasonCode.SCREEN_CAPTURE_FAILED,
     ReasonCode.DESIRED_OFF,
     ReasonCode.NONE -> false
 }
@@ -316,6 +318,16 @@ private fun SourceDetailTemplate(
         }
         // In every state, so the owner reads what turning it on does before they do.
         activeLine?.let { PaneNote(it, modifier = Modifier.testTag(ACTIVE_LINE_TEST_TAG)) }
+        if (status.sourceId == "screen") {
+            PaneNote("while this is on, the solstone app takes in video of the app or screen you choose, including while you use other apps. it stays on this device until it can reach your journal.")
+            PaneNote("android asks each time you turn this on. audio and camera have their own switches.")
+            if (status.wish == SourceWish.Off && status.wishExpressed && status.reason == ReasonCode.NONE) {
+                PaneNote("this session ended. turn this on again to choose what to share.")
+            }
+            if (status.reason == ReasonCode.STORAGE_FULL) {
+                PaneNote("this device is low on storage. free up space before turning this on again.")
+            }
+        }
     }
     // The facts. ⛔ Not the label and not the state word — both are already on screen. The only
     // thing this block adds is § 5.1's intent-vs-state split, so ⛔ do not collapse the two rows to

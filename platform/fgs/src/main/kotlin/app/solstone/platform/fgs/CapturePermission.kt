@@ -19,10 +19,11 @@ import android.Manifest
  * place the two are related. A second copy would agree on the day it was written and drift after —
  * which is exactly how a deleted product name outlived its own rename in the reason table.
  */
-fun capturePermission(type: CaptureForegroundType): String = when (type) {
+fun capturePermission(type: CaptureForegroundType): String? = when (type) {
     CaptureForegroundType.MICROPHONE -> Manifest.permission.RECORD_AUDIO
     CaptureForegroundType.CAMERA -> Manifest.permission.CAMERA
     CaptureForegroundType.LOCATION -> Manifest.permission.ACCESS_COARSE_LOCATION
+    CaptureForegroundType.MEDIA_PROJECTION -> null
 }
 
 /** Whether [status] reports [type]'s permission as held. ⛔ Keep in step with [capturePermission]. */
@@ -31,4 +32,5 @@ fun capturePermissionGranted(type: CaptureForegroundType, status: PermissionStat
         CaptureForegroundType.MICROPHONE -> status.microphoneGranted
         CaptureForegroundType.CAMERA -> status.cameraGranted
         CaptureForegroundType.LOCATION -> status.locationGranted
+        CaptureForegroundType.MEDIA_PROJECTION -> false
     }

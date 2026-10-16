@@ -21,6 +21,7 @@ class SourceActiveLineTest {
         assertNotNull(sourceActiveLine("camera"))
         assertNull(sourceActiveLine("audio"))
         assertNull(sourceActiveLine("location"))
+        assertNull(sourceActiveLine("screen"))
     }
 
     @Test
@@ -29,6 +30,7 @@ class SourceActiveLineTest {
             assertEquals(sourceActiveLine("camera"), sourceSubLine(on("camera"), paired))
             assertNull(sourceSubLine(on("audio"), paired))
             assertNull(sourceSubLine(on("location"), paired))
+            assertNull(sourceSubLine(on("screen"), paired))
         }
     }
 

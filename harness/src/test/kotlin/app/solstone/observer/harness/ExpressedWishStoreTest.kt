@@ -56,6 +56,30 @@ class ExpressedWishStoreTest {
     }
 
     @Test
+    fun backfillDoesNotWriteScreenOn() {
+        val store = InMemorySourceWishStore()
+        val fakes = listOf("audio", "location", "camera", "screen").associateWith { FakeSourceEngine(conditionValue = running()) }
+        val types = mapOf(
+            "audio" to CaptureForegroundType.MICROPHONE,
+            "location" to CaptureForegroundType.LOCATION,
+            "camera" to CaptureForegroundType.CAMERA,
+            "screen" to CaptureForegroundType.MEDIA_PROJECTION,
+        )
+        val f = fixture(permissionStatus = onlyCameraGranted(), snapshot = snapshot())
+        SourceRegistry(
+            f.controller,
+            fakes.map { (id, engine) ->
+                SourceRegistration(id, engine, { capturePermissionGranted(types.getValue(id), it) }, types.getValue(id))
+            },
+            MainPoster { it() },
+            store,
+        )
+        val written = (store.read() as WishStoreState.Loaded).wishes
+        assertEquals(mapOf("camera" to SourceWish.On), written)
+        assertFalse("screen" in written)
+    }
+
+    @Test
     fun anUngrantedSourceWithNoEntryStaysABSENT() {
         val store = InMemorySourceWishStore()
         val registry = registry(store, onlyCameraGranted())
@@ -153,6 +177,34 @@ class ExpressedWishStoreTest {
             listOf(mapOf("audio" to SourceWish.Off, "location" to SourceWish.On, "camera" to SourceWish.On)),
             store.writes,
         )
+    }
+
+    @Test
+    fun unreadableWishStoreAudioOffPlanDoesNotPersistScreenOn() {
+        val store = UnreadableWishStore()
+        val fakes = listOf("audio", "location", "camera", "screen").associateWith { FakeSourceEngine(conditionValue = running()) }
+        val types = mapOf(
+            "audio" to CaptureForegroundType.MICROPHONE,
+            "location" to CaptureForegroundType.LOCATION,
+            "camera" to CaptureForegroundType.CAMERA,
+            "screen" to CaptureForegroundType.MEDIA_PROJECTION,
+        )
+        val f = fixture(permissionStatus = onlyCameraGranted(), snapshot = snapshot())
+        f.desiredStore.setDesiredOn(true)
+        val registry = SourceRegistry(
+            f.controller,
+            fakes.map { (id, engine) ->
+                SourceRegistration(id, engine, { capturePermissionGranted(types.getValue(id), it) }, types.getValue(id))
+            },
+            MainPoster { it() },
+            store,
+        )
+        registry.setWish("audio", SourceWish.Off)
+        assertEquals(
+            listOf(mapOf("audio" to SourceWish.Off, "location" to SourceWish.On, "camera" to SourceWish.On)),
+            store.writes,
+        )
+        assertFalse(store.writes.any { "screen" in it })
     }
 
     @Test

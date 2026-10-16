@@ -74,6 +74,7 @@ class HarnessController(
     private val monotonicMs: () -> Long = { System.nanoTime() / 1_000_000 },
     // Whether the foreground service is up and holding its capture types — intake that started.
     private val foregroundServiceLive: () -> Boolean = { ObserverForegroundService.heldCaptureForegroundTypes != null },
+    var mediaProjectionPromotable: () -> Boolean = { false },
 ) {
 
     var desiredOn: Boolean
@@ -123,6 +124,7 @@ class HarnessController(
             cameraGranted = permissionStatus.cameraGranted,
             locationGranted = permissionStatus.locationGranted,
             declared = declaredCaptureForegroundTypes,
+            mediaProjectionPromotable = mediaProjectionPromotable(),
         )
         if (subset.isEmpty()) {
             blockers += ReasonCode.PERMISSION_REVOKED

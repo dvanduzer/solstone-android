@@ -55,6 +55,7 @@ data class SourceRegistration(
     val engine: ContinuousSourceEngine,
     val requiredPermissionsGranted: (PermissionStatus) -> Boolean = { true },
     val captureForegroundType: CaptureForegroundType? = null,
+    val reasonWhenOff: (() -> ReasonCode?)? = null,
 )
 
 sealed interface SourceToggleResult {

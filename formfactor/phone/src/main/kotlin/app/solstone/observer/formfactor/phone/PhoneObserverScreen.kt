@@ -446,7 +446,12 @@ internal fun PhoneObserverScreen(
                     },
                     onToggle = { id, wish ->
                         if (hapticsEnabled) view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                        onToggle(id, wish)
+                        when (screenToggleRoute(id, wish, fromDetail = false)) {
+                            ScreenToggleAction.OpenDetail -> {
+                                detailStack = detailStack.showInDetail(PhoneRoute.SourceDetail(id))
+                            }
+                            else -> onToggle(id, wish)
+                        }
                     },
                     onOpenImport = withHaptic {
                         detailStack = detailStack.showInDetail(PhoneRoute.Import)

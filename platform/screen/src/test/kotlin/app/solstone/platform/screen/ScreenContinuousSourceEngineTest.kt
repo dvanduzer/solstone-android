@@ -1,0 +1,291 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 sol pbc
+
+package app.solstone.platform.screen
+
+import android.content.Intent
+import android.util.DisplayMetrics
+import app.solstone.core.model.ReasonCode
+import app.solstone.core.sources.EmissionSink
+import app.solstone.core.sources.MAIN_STREAM
+import app.solstone.core.sources.SealWindowHold
+import app.solstone.core.sources.SourceEmission
+import app.solstone.core.spool.UnresolvedInterruption
+import app.solstone.platform.fgs.ScreenConsentToken
+import app.solstone.platform.power.StorageStatus
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.ZoneId
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class ScreenContinuousSourceEngineTest {
+
+    private class FakeEncoder(private val firstFrame: Long = 1_700_000_000_050L, private val full: Boolean = false) : ScreenEncoder {
+        var started = false
+        var stopped = false
+        var released = false
+
+        override fun inputSurface(): Any = "fake-surface"
+        override fun sizeLimitReached(): Boolean = full
+
+        override fun start(outputH264: File, outputIndex: File, onFirstFrame: (firstFrameEpochMs: Long) -> Unit) {
+            started = true
+            outputH264.writeBytes(ByteArray(100))
+            outputIndex.writeBytes(ByteArray(20))
+            onFirstFrame(firstFrame)
+        }
+
+        override fun stop(): Long {
+            stopped = true
+            return 10L
+        }
+
+        override fun release() {
+            released = true
+        }
+    }
+
+    private class FakeRemuxer(
+        var result: ScreenRemuxResult = ScreenRemuxResult.Success(sampleDurationMs = 5_000L, outputBytes = 500L),
+    ) : ScreenRemuxer {
+        override fun remux(dir: File, h264File: File, indexFile: File, recordFile: File, mp4OutputFile: File): ScreenRemuxResult {
+            if (result is ScreenRemuxResult.Success) {
+                mp4OutputFile.writeBytes(ByteArray(500))
+            }
+            return result
+        }
+    }
+
+    private class TestInterruption : UnresolvedInterruption {
+        var marked = false
+        override fun markUnresolved(): Boolean {
+            marked = true
+            return true
+        }
+        override fun isUnresolved(): Boolean = marked
+    }
+
+    private class SimpleVirtualDisplay : ScreenVirtualDisplay {
+        override fun setSurface(surface: Any?) {}
+        override fun resize(width: Int, height: Int, dpi: Int) {}
+        override fun release() {}
+    }
+
+    private class SimpleProjection : ScreenProjection {
+        override fun registerCallback(callback: ScreenProjectionCallback) {}
+        override fun createVirtualDisplay(
+            name: String,
+            width: Int,
+            height: Int,
+            dpi: Int,
+            surface: Any?,
+            flags: Int,
+        ): ScreenVirtualDisplay = SimpleVirtualDisplay()
+        override fun stop() {}
+    }
+
+    private class SimpleProjectionManager : ScreenProjectionManager {
+        override val getMediaProjectionCount: Int = 1
+        override val createVirtualDisplayCount: Int = 1
+        override fun acquireProjection(token: ScreenConsentToken): ScreenProjection = SimpleProjection()
+    }
+
+    private enum class FakeWish { Off, On }
+
+    @Test
+    fun sizeBoundarySealsAPortionAndContinuesInTheSameConsentAndGridWindow() {
+        val root = Files.createTempDirectory("screen-size-rollover").toFile()
+        val secondStarted = java.util.concurrent.CountDownLatch(1)
+        val emitted = java.util.concurrent.CopyOnWriteArrayList<SourceEmission>()
+        val count = java.util.concurrent.atomic.AtomicInteger()
+        val time = java.util.concurrent.atomic.AtomicLong(1_700_000_000_000L)
+        val interruption = TestInterruption()
+        val holder = ScreenSessionHolder(SimpleProjectionManager(), {
+            DisplayMetrics().apply { widthPixels = 720; heightPixels = 1280; densityDpi = 320 }
+        }, {})
+        assertTrue(holder.startSession(token = ScreenConsentToken(-1, Intent(), 1L)))
+        val engine = ScreenContinuousSourceEngine(root, StorageStatus({ 100_000L }, 1L),
+            FakeRemuxer(), interruption, holder,
+            encoderFactory = { _, _, _, _ ->
+                val first = time.getAndAdd(1_000L) + 50L
+                FakeEncoder(first, full = count.incrementAndGet() == 1)
+            }, nowProvider = time::get, sleeper = {
+                secondStarted.countDown(); Thread.sleep(60_000L)
+            })
+        try {
+            engine.start(EmissionSink { emitted += it })
+            assertTrue(secondStarted.await(3, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(1, emitted.size)
+            assertTrue(holder.isSessionLive())
+            assertFalse(interruption.marked)
+            engine.stop()
+            assertEquals(2, emitted.size)
+            assertEquals(1_700_000_000_050L, emitted[0].captureStartEpochMs)
+            assertEquals(1_700_000_001_050L, emitted[1].captureStartEpochMs)
+            assertEquals(ScreenContinuousSourceEngine.windowStart(emitted[0].captureStartEpochMs),
+                ScreenContinuousSourceEngine.windowStart(emitted[1].captureStartEpochMs))
+        } finally { engine.stop(); holder.stopSession(); root.deleteRecursively() }
+    }
+
+    @Test
+    fun freshSessionQueuesBehindSlowOldFinalizationAndStartsAfterItCloses() {
+        val root = Files.createTempDirectory("screen-slow-stop").toFile()
+        val sleeping = java.util.concurrent.LinkedBlockingQueue<Int>()
+        val remuxEntered = java.util.concurrent.CountDownLatch(1)
+        val releaseRemux = java.util.concurrent.CountDownLatch(1)
+        val count = java.util.concurrent.atomic.AtomicInteger()
+        val time = java.util.concurrent.atomic.AtomicLong(1_700_000_000_050L)
+        val holder = ScreenSessionHolder(SimpleProjectionManager(), {
+            DisplayMetrics().apply { widthPixels = 720; heightPixels = 1280; densityDpi = 320 }
+        }, {})
+        val remuxer = ScreenRemuxer { _, _, _, _, output ->
+            if (count.get() == 1) { remuxEntered.countDown(); releaseRemux.await() }
+            output.writeBytes(ByteArray(500))
+            ScreenRemuxResult.Success(200L, 500L)
+        }
+        val engine = ScreenContinuousSourceEngine(root, StorageStatus({ 100_000L }, 1L), remuxer,
+            TestInterruption(), holder, encoderFactory = { _, _, _, _ ->
+                count.incrementAndGet(); FakeEncoder(time.get())
+            }, nowProvider = time::get, sleeper = {
+                sleeping.put(count.get()); Thread.sleep(60_000L)
+            }, stopJoinTimeoutMs = 20L)
+        try {
+            assertTrue(holder.startSession(token = ScreenConsentToken(-1, Intent(), 1L)))
+            engine.start(EmissionSink {})
+            assertEquals(1, sleeping.poll(3, java.util.concurrent.TimeUnit.SECONDS))
+            time.addAndGet(500L)
+            engine.stop()
+            assertTrue(remuxEntered.await(3, java.util.concurrent.TimeUnit.SECONDS))
+            holder.stopSession()
+            assertTrue(holder.startSession(token = ScreenConsentToken(-1, Intent(), 2L)))
+            time.addAndGet(1_000L)
+            engine.start(EmissionSink {})
+            releaseRemux.countDown()
+            assertEquals(2, sleeping.poll(3, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue(holder.isSessionLive())
+        } finally {
+            releaseRemux.countDown(); time.addAndGet(500L); engine.stop(); holder.stopSession()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun interruptDuringRecordingClosesEncoderAndEmitsThePlayablePrefix() {
+        val root = Files.createTempDirectory("screen-stop").toFile()
+        val enteredSleep = java.util.concurrent.CountDownLatch(1)
+        val emitted = java.util.concurrent.CopyOnWriteArrayList<SourceEmission>()
+        val encoder = FakeEncoder()
+        val holder = ScreenSessionHolder(SimpleProjectionManager(), {
+            DisplayMetrics().apply { widthPixels = 720; heightPixels = 1280; densityDpi = 320 }
+        }, {})
+        assertTrue(holder.startSession(token = ScreenConsentToken(-1, Intent(), 1L)))
+        val engine = ScreenContinuousSourceEngine(root, StorageStatus({ 100_000L }, 1L),
+            FakeRemuxer(), TestInterruption(), holder,
+            encoderFactory = { _, _, _, _ -> encoder },
+            nowProvider = { 1_700_000_000_500L },
+            sleeper = { enteredSleep.countDown(); Thread.sleep(60_000L) })
+        try {
+            engine.start(EmissionSink { emitted += it })
+            assertTrue(enteredSleep.await(3, java.util.concurrent.TimeUnit.SECONDS))
+            engine.stop()
+            assertTrue(encoder.stopped)
+            assertTrue(encoder.released)
+            assertEquals(1, emitted.size)
+            assertEquals(1_700_000_000_050L, emitted.single().captureStartEpochMs)
+            assertEquals(1_700_000_000_500L, emitted.single().captureEndEpochMs)
+            assertTrue(emitted.single().independentTimeline)
+            assertEquals(1, engine.inFlightRecordingIds().size)
+        } finally { engine.stop(); holder.stopSession(); root.deleteRecursively() }
+    }
+
+    @Test
+    fun storageFloorDuringWindowStopsSessionRemuxesPlayablePrefixAndLeavesOtherWishUntouched() {
+        val tempDir = Files.createTempDirectory(Path.of("/var/tmp"), "screen-engine-test-").toFile()
+        try {
+            var freeBytes = 2_000L
+            val storage = StorageStatus({ freeBytes }, minimumFreeBytes = 1_000L)
+            val remuxer = FakeRemuxer()
+            val interruption = TestInterruption()
+            val holder = ScreenSessionHolder(
+                projectionManager = SimpleProjectionManager(),
+                getDisplayMetrics = {
+                    DisplayMetrics().apply {
+                        widthPixels = 720
+                        heightPixels = 1280
+                        densityDpi = 320
+                    }
+                },
+                onSessionEnded = {},
+            )
+            val token = ScreenConsentToken(resultCode = -1, data = Intent(), generation = 1L)
+            assertTrue(holder.startSession(service = null, token = token))
+            assertTrue(holder.isSessionLive())
+
+            var floorTrippedCalled = false
+            var simulatedTime = 1_700_000_000_000L // Window start
+            var anotherSourceWish = FakeWish.On
+
+            val emissions = mutableListOf<SourceEmission>()
+            val holdsReleased = mutableListOf<Long>()
+
+            val engine = ScreenContinuousSourceEngine(
+                outputDirectory = tempDir,
+                storageStatus = storage,
+                remuxer = remuxer,
+                interruption = interruption,
+                sessionHolder = holder,
+                encoderFactory = { _, _, _, _ -> FakeEncoder() },
+                onFloorTripped = { floorTrippedCalled = true },
+                onFailed = {},
+                nowProvider = { simulatedTime },
+                sleeper = { delta ->
+                    // During recording sleep, trip storage floor
+                    freeBytes = 500L
+                    simulatedTime += delta
+                },
+                zoneProvider = { ZoneId.of("UTC") },
+            )
+
+            engine.bindSealWindowHold(object : SealWindowHold {
+                override fun hold(stream: String, windowStartEpochMs: Long) {}
+                override fun feed(emission: SourceEmission) {}
+                override fun release(stream: String, windowStartEpochMs: Long) {
+                    holdsReleased += windowStartEpochMs
+                }
+                override fun releaseAfterFeed(emission: SourceEmission) {
+                    emissions += emission
+                }
+            })
+
+            engine.start(EmissionSink {})
+
+            // Wait for worker to stop after floor trip
+            var tries = 0
+            while (holder.isSessionLive() && tries++ < 50) {
+                Thread.sleep(20)
+            }
+
+            engine.stop()
+
+            // Verification:
+            // 1. Session is stopped
+            assertFalse(holder.isSessionLive())
+            // 2. Playable prefix was remuxed and emitted
+            assertEquals(1, emissions.size)
+            assertEquals(ScreenConstants.SOURCE_ID, emissions.single().sourceId)
+            assertEquals(MAIN_STREAM, emissions.single().stream)
+            // 3. Storage floor tripped hook called and reasonWhenOff is STORAGE_FULL
+            assertTrue(floorTrippedCalled)
+            assertEquals(ReasonCode.STORAGE_FULL, engine.reasonWhenOff())
+            assertFalse(engine.condition().available)
+            // 4. Other source's wish untouched
+            assertEquals(FakeWish.On, anotherSourceWish)
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+}

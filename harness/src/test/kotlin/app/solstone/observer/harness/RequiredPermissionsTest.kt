@@ -11,6 +11,7 @@ import app.solstone.platform.fgs.capturePermissionGranted
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class RequiredPermissionsTest {
@@ -62,7 +63,11 @@ class RequiredPermissionsTest {
         val registry = sourceRegistry(
             registrations = listOf(
                 registration("audio", CaptureForegroundType.MICROPHONE),
-                SourceRegistration("screen", FakeSourceEngine(conditionValue = running())),
+                SourceRegistration(
+                    "screen",
+                    FakeSourceEngine(conditionValue = running()),
+                    captureForegroundType = CaptureForegroundType.MEDIA_PROJECTION,
+                ),
             ),
         )
 
@@ -79,7 +84,8 @@ class RequiredPermissionsTest {
      */
     @Test
     fun theForwardMapAndTheGrantedPredicateAgreeForEveryCaptureType() {
-        CaptureForegroundType.entries.forEach { type ->
+        val runtimeTypes = CaptureForegroundType.entries.filter { it != CaptureForegroundType.MEDIA_PROJECTION }
+        runtimeTypes.forEach { type ->
             val onlyThisOne = grantedPermissions().copy(
                 microphoneGranted = type == CaptureForegroundType.MICROPHONE,
                 cameraGranted = type == CaptureForegroundType.CAMERA,
@@ -89,10 +95,12 @@ class RequiredPermissionsTest {
             CaptureForegroundType.entries.filter { it != type }.forEach { other ->
                 assertFalse(capturePermissionGranted(other, onlyThisOne), "$type vs $other")
             }
-            assertTrue(capturePermission(type).startsWith("android.permission."), type.name)
+            assertTrue(requireNotNull(capturePermission(type)).startsWith("android.permission."), type.name)
         }
-        // Distinctness: three types, three different permission strings.
-        val all = CaptureForegroundType.entries.map(::capturePermission)
+        assertNull(capturePermission(CaptureForegroundType.MEDIA_PROJECTION))
+        assertFalse(capturePermissionGranted(CaptureForegroundType.MEDIA_PROJECTION, grantedPermissions()))
+        // Distinctness: three runtime types, three different permission strings.
+        val all = runtimeTypes.map { requireNotNull(capturePermission(it)) }
         assertEquals(all.size, all.distinct().size, all.toString())
     }
 

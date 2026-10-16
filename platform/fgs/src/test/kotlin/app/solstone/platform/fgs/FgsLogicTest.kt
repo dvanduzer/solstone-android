@@ -521,6 +521,39 @@ class FgsLogicTest {
         assertEquals(MaskNarrowResult.ApplyFailed, classifyMaskNarrow(serviceReachable = true) { throw RuntimeException("fail") })
     }
 
+    @Test
+    fun screenOnlyEffectiveCapturePlanWithPromotableTrueDoesNotEndSession() {
+        val declared = setOf(
+            CaptureForegroundType.MICROPHONE,
+            CaptureForegroundType.LOCATION,
+            CaptureForegroundType.CAMERA,
+            CaptureForegroundType.MEDIA_PROJECTION,
+        )
+        val planPromotable = effectiveCapturePlan(
+            microphoneGranted = false,
+            cameraGranted = false,
+            locationGranted = false,
+            declared = declared,
+            wishedOn = setOf(CaptureForegroundType.MEDIA_PROJECTION),
+            liveHeld = null,
+            mediaProjectionPromotable = true,
+        )
+        assertEquals(setOf(CaptureForegroundType.MEDIA_PROJECTION), planPromotable.types)
+        assertFalse(planPromotable.endSession)
+
+        val planNotPromotable = effectiveCapturePlan(
+            microphoneGranted = false,
+            cameraGranted = false,
+            locationGranted = false,
+            declared = declared,
+            wishedOn = setOf(CaptureForegroundType.MEDIA_PROJECTION),
+            liveHeld = null,
+            mediaProjectionPromotable = false,
+        )
+        assertEquals(emptySet(), planNotPromotable.types)
+        assertTrue(planNotPromotable.endSession)
+    }
+
     private fun granted(): PermissionStatus =
         PermissionStatus(
             microphoneGranted = true,

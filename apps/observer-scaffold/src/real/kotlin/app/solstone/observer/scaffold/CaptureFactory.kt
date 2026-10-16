@@ -26,6 +26,13 @@ import app.solstone.platform.persistence.room.RoomSealedSegmentSink
 import app.solstone.platform.persistence.room.occupiedDirSegments
 import app.solstone.platform.power.FileUsableSpaceProvider
 import app.solstone.platform.power.StorageStatus
+import app.solstone.platform.screen.AndroidScreenProjectionManager
+import app.solstone.platform.screen.AndroidScreenRemuxer
+import app.solstone.platform.screen.ScreenConstants
+import app.solstone.platform.screen.ScreenContinuousSourceEngine
+import app.solstone.platform.screen.ScreenRecoveryManager
+import app.solstone.platform.screen.ScreenSessionHolder
+import app.solstone.platform.fgs.ObserverForegroundService
 import java.nio.file.Files
 
 fun captureSourceIdentities(): List<CaptureSourceIdentity> = listOf(
@@ -43,7 +50,11 @@ fun captureSourceIdentities(): List<CaptureSourceIdentity> = listOf(
     ),
 )
 
-fun createCaptureSetup(context: Context, cameraLock: CameraLock): CaptureSetup {
+fun createCaptureSetup(
+    context: Context,
+    cameraLock: CameraLock,
+    registerScreenSource: Boolean = false,
+): CaptureSetup {
     val storageStatus = StorageStatus(FileUsableSpaceProvider(context.filesDir), MIN_FREE_BYTES)
     val interruption = UnresolvedInterruptionStore(context.filesDir.resolve("audio-interruption").toPath())
     val remuxer = AndroidAacAdtsRemuxer()
@@ -58,6 +69,54 @@ fun createCaptureSetup(context: Context, cameraLock: CameraLock): CaptureSetup {
         stillCamera = selectStillCamera(context),
         cameraLock = cameraLock,
     )
+    val screenStorageStatus = if (registerScreenSource) {
+        StorageStatus(FileUsableSpaceProvider(context.filesDir), SCREEN_MIN_FREE_BYTES)
+    } else null
+
+    val screenSessionHolder = if (registerScreenSource) {
+        val projManager = AndroidScreenProjectionManager(context)
+        ScreenSessionHolder(
+            projectionManager = projManager,
+            getDisplayMetrics = { context.resources.displayMetrics },
+            onSessionEnded = {
+                if (!ObserverForegroundService.isScreenSessionLive()) {
+                    ObserverForegroundService.sessionPromotable.set(false)
+                    ObserverForegroundService.onScreenSessionEnded?.invoke()
+                }
+            },
+        ).also { holder ->
+            ObserverForegroundService.screenSessionStarter = ObserverForegroundService.Companion.ScreenSessionStarter { _, token ->
+                holder.startSession(context, token).also { started ->
+                    if (!started) UnresolvedInterruptionStore(context.filesDir.resolve("screen-interruption").toPath()).markUnresolved()
+                }
+            }
+            ObserverForegroundService.screenSessionStopper = {
+                holder.stopSession()
+                ObserverForegroundService.sessionPromotable.set(false)
+                ObserverForegroundService.onScreenSessionEnded?.invoke()
+            }
+            ObserverForegroundService.isScreenSessionLive = {
+                holder.isSessionLive()
+            }
+            ObserverForegroundService.screenStorageOkCheck = {
+                screenStorageStatus?.isStorageOk() ?: true
+            }
+        }
+    } else null
+
+    val screenRemuxer = if (registerScreenSource) AndroidScreenRemuxer() else null
+    val screen = if (registerScreenSource && screenSessionHolder != null && screenRemuxer != null && screenStorageStatus != null) {
+        ScreenContinuousSourceEngine(
+            outputDirectory = context.filesDir.resolve("screen-source"),
+            storageStatus = screenStorageStatus,
+            remuxer = screenRemuxer,
+            interruption = UnresolvedInterruptionStore(context.filesDir.resolve("screen-interruption").toPath()),
+            sessionHolder = screenSessionHolder,
+            onFloorTripped = { android.os.Handler(android.os.Looper.getMainLooper()).post { if (!screenSessionHolder.isSessionLive()) ObserverForegroundService.screenSessionStopper?.invoke() } },
+            onFailed = { android.os.Handler(android.os.Looper.getMainLooper()).post { if (!screenSessionHolder.isSessionLive()) ObserverForegroundService.screenSessionStopper?.invoke() } },
+        )
+    } else null
+
     val engines = mapOf(
         AudioContinuousSourceEngine.SOURCE_ID to (audio to { p: app.solstone.platform.fgs.PermissionStatus -> p.microphoneGranted }),
         LocationContinuousSourceEngine.SOURCE_ID to (location to { p: app.solstone.platform.fgs.PermissionStatus -> p.locationGranted }),
@@ -72,13 +131,28 @@ fun createCaptureSetup(context: Context, cameraLock: CameraLock): CaptureSetup {
                 requiredPermissionsGranted = permCheck,
                 captureForegroundType = identity.captureForegroundType,
             )
-        },
+        } + listOfNotNull(
+            screen?.let { s ->
+                SourceRegistration(
+                    sourceId = ScreenConstants.SOURCE_ID,
+                    engine = s,
+                    // requiredPermissionsGranted returns true because mediaProjection has no Android runtime
+                    // permission to grant/revoke in PermissionStatus; capturePermission is null and
+                    // capturePermissionGranted is false so the migration backfill in SourceRegistry does not
+                    // see an affirmative runtime grant and manufacture an On wish.
+                    requiredPermissionsGranted = { true },
+                    captureForegroundType = CaptureForegroundType.MEDIA_PROJECTION,
+                    reasonWhenOff = s::reasonWhenOff,
+                )
+            }
+        ),
         payloadBytesProvider = object : PayloadBytesProvider {
             override fun open(payload: SegmentPayload) =
                 when (payload.sourceId) {
                     AudioContinuousSourceEngine.SOURCE_ID -> audio.open(payload)
                     LocationContinuousSourceEngine.SOURCE_ID -> location.open(payload)
                     StillCaptureEngine.SOURCE_ID -> camera.open(payload)
+                    ScreenConstants.SOURCE_ID -> screen?.open(payload) ?: error("unknown payload source: ${payload.sourceId}")
                     else -> error("unknown payload source: ${payload.sourceId}")
                 }
 
@@ -87,6 +161,7 @@ fun createCaptureSetup(context: Context, cameraLock: CameraLock): CaptureSetup {
                     AudioContinuousSourceEngine.SOURCE_ID -> audio.release(payload)
                     LocationContinuousSourceEngine.SOURCE_ID -> location.release(payload)
                     StillCaptureEngine.SOURCE_ID -> camera.release(payload)
+                    ScreenConstants.SOURCE_ID -> screen?.release(payload)
                     else -> error("unknown payload source: ${payload.sourceId}")
                 }
             }
@@ -96,6 +171,7 @@ fun createCaptureSetup(context: Context, cameraLock: CameraLock): CaptureSetup {
                     AudioContinuousSourceEngine.SOURCE_ID -> audio.discardUncommitted(payload)
                     LocationContinuousSourceEngine.SOURCE_ID -> location.discardUncommitted(payload)
                     StillCaptureEngine.SOURCE_ID -> camera.discardUncommitted(payload)
+                    ScreenConstants.SOURCE_ID -> screen?.discardUncommitted(payload) ?: true
                     else -> error("unknown payload source: ${payload.sourceId}")
                 }
         },
@@ -188,6 +264,70 @@ fun createCaptureSetup(context: Context, cameraLock: CameraLock): CaptureSetup {
             )
             manager.recover(inFlightIds)
         },
+        inFlightScreenIds = { screen?.inFlightRecordingIds() ?: emptySet() },
+        recoverScreen = { spoolDir, dao, interruptionStore, inFlightIds ->
+            if (screenRemuxer != null) {
+                val factsFunction = { day: String, stream: String, segmentLeaf: String, sha256: String ->
+                    val wireId = "$day/$stream/$segmentLeaf"
+                    val rows = (dao.duplicateBySha256(sha256) + dao.filesBySegmentId(wireId)).distinctBy { it.rowId }
+                    rows.mapNotNull { fileRow ->
+                        val segmentRow = dao.segmentById(fileRow.segmentId) ?: return@mapNotNull null
+                        val spoolPayload = spoolDir.resolve(segmentRow.day).resolve(segmentRow.stream).resolve(segmentRow.dirSegment).resolve(fileRow.name)
+                        val exists = Files.isRegularFile(spoolPayload)
+                        val matches = exists && runCatching { app.solstone.core.segment.sha256(spoolPayload) == fileRow.sha256 }.getOrDefault(false)
+                        app.solstone.platform.audio.AudioSpoolFact(
+                            segmentId = fileRow.segmentId,
+                            sha256 = fileRow.sha256,
+                            captureStartEpochMs = fileRow.captureStartEpochMs,
+                            captureEndEpochMs = fileRow.captureEndEpochMs,
+                            sourceId = fileRow.sourceId,
+                            name = fileRow.name,
+                            spoolPayloadExists = exists,
+                            spoolPayloadShaMatches = matches,
+                            spoolCustodyDurable = matches && app.solstone.core.spool.confirmDurableSpoolCustody(spoolDir, spoolPayload.parent),
+                            confirmedUploaded = segmentRow.state == app.solstone.core.model.QueueState.UPLOADED ||
+                                segmentRow.state == app.solstone.core.model.QueueState.EVICTED,
+                        )
+                    }
+                }
+                val lookup = object : AudioSpoolLookup {
+                    override fun findStatus(
+                        sha256: String,
+                        captureStartEpochMs: Long,
+                        captureEndEpochMs: Long,
+                        sourceId: String,
+                        name: String,
+                        day: String,
+                        stream: String,
+                        segmentLeaf: String,
+                    ): AudioCommitStatus {
+                        val facts = factsFunction(day, stream, segmentLeaf, sha256)
+                        return app.solstone.platform.audio.classifyAudioAttempt(
+                            sha256 = sha256,
+                            captureStartEpochMs = captureStartEpochMs,
+                            captureEndEpochMs = captureEndEpochMs,
+                            sourceId = sourceId,
+                            name = name,
+                            day = day,
+                            stream = stream,
+                            segmentLeaf = segmentLeaf,
+                            facts = facts,
+                        )
+                    }
+                }
+                val manager = ScreenRecoveryManager(
+                    screenSourceDir = context.filesDir.resolve("screen-source"),
+                    spoolDir = spoolDir,
+                    occupiedLeaves = dao::occupiedDirSegments,
+                    lookup = lookup,
+                    sealedSink = RoomSealedSegmentSink(dao),
+                    interruption = interruptionStore,
+                    remuxer = screenRemuxer,
+                    factsProvider = factsFunction,
+                )
+                manager.recover(inFlightIds)
+            }
+        },
     )
 }
 
@@ -195,3 +335,9 @@ private fun selectStillCamera(context: Context): StillCamera =
     if (Build.VERSION.SDK_INT >= 29) Camera2StillCamera(context) else LegacyStillCamera(context)
 
 private const val MIN_FREE_BYTES = 50L * 1024L * 1024L
+
+// Each elementary-stream portion has a hard 32 MiB ceiling, independent of codec bitrate.
+// Published MP4s are capped at 33 MiB. The floor retains room for remux and spool copies
+// beside the original, the other sources' unchanged 50 MiB floor, and filesystem overhead.
+// The same portion limit bounds the existing in-memory multipart upload.
+private const val SCREEN_MIN_FREE_BYTES = 256L * 1024L * 1024L

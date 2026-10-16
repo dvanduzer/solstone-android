@@ -16,6 +16,8 @@ data class SourceEmission(
   val payloadRefs: List<PayloadRef>,
   val metadata: Map<String, String>,
   val gaps: List<GapEvent>,
+  // Media whose container starts at zero needs a wire key anchored at its first sample.
+  val independentTimeline: Boolean = false,
 )
 
 const val MAIN_STREAM = "observer"
@@ -33,6 +35,17 @@ interface ContinuousSourceEngine {
     fun start(sink: EmissionSink)
     fun stop()
     fun condition(): SourceCondition
+}
+
+interface SealWindowHold {
+    fun hold(stream: String, windowStartEpochMs: Long)
+    fun feed(emission: SourceEmission)
+    fun releaseAfterFeed(emission: SourceEmission)
+    fun release(stream: String, windowStartEpochMs: Long)
+}
+
+interface SealWindowHoldClient {
+    fun bindSealWindowHold(hold: SealWindowHold)
 }
 
 interface ImportSourceHandler {

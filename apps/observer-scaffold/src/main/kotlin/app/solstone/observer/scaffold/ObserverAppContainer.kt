@@ -74,7 +74,7 @@ class ObserverAppContainer(
 ) : ObserverRuntimeContainer {
     override val cameraLock = SingleHolderCameraLock()
     override val captureAuthority = VisibleCaptureOwnerRegistry()
-    internal val captureSetup = createCaptureSetup(context, cameraLock)
+    internal val captureSetup = createCaptureSetup(context, cameraLock, spec.registerScreenSource)
     private val database: SolstonePersistenceDatabase = openSolstonePersistenceDatabase(context)
     private val spoolDir = context.filesDir.toPath().resolve("spool")
     private val finisher = ConfirmedCopyFinisher(
@@ -145,6 +145,8 @@ class ObserverAppContainer(
         isVisibleOwnerPresent = { captureAuthority.isVisibleOwnerPresent() },
         asyncExecutor = { task -> background.execute(task) },
         onRestartFinished = { backgroundStatusRefreshListener?.invoke() },
+        screenSessionLive = { ObserverForegroundService.isScreenSessionLive() },
+        refreshWithoutStoppingService = { ObserverForegroundService.refreshRunningCaptureTypes(context) },
     )
 
     override val flavor: SharedObserverFlavor = buildObserverFlavor(
@@ -175,6 +177,9 @@ class ObserverAppContainer(
         private set
     override val inFlightAudioIds: Set<String>
         get() = captureSetup.inFlightAudioIds()
+    val inFlightScreenIds: Set<String>
+        get() = captureSetup.inFlightScreenIds()
+    @Volatile var onScreenOwnerStart: (() -> Unit)? = null
     @Volatile private var deferredStartMode: ObserverStartMode? = null
 
     private val pollRunnable = object : Runnable {
@@ -197,6 +202,7 @@ class ObserverAppContainer(
     init {
         flavor.opportunisticSync?.diagnosticReporter = syncFailureReporter
         if (spec.matchForegroundTypesToWishes) {
+            controller.mediaProjectionPromotable = { ObserverForegroundService.isSessionPromotable() }
             controller.blockStartWhenEffectiveEmpty = {
                 val permissions = controller.permissionStatus
                 val declared = captureForegroundTypesFromTokens(spec.declaredCaptureForegroundTypes)
@@ -212,8 +218,27 @@ class ObserverAppContainer(
                     declared = declared,
                     wishedOn = wishes,
                     liveHeld = ObserverForegroundService.heldCaptureForegroundTypes,
+                    mediaProjectionPromotable = ObserverForegroundService.isSessionPromotable(),
                 )
                 plan.endSession
+            }
+        }
+        if (spec.registerScreenSource) {
+            ObserverForegroundService.onScreenSessionStarted = {
+                val outcome = sources.setWish("screen", SourceWish.On)
+                if (outcome is app.solstone.observer.harness.SourceToggleResult.NotSaved) {
+                    ObserverForegroundService.screenSessionStopper?.invoke()
+                } else {
+                    onScreenOwnerStart?.invoke()
+                    controller.ensureObserving()
+                }
+            }
+            ObserverForegroundService.onScreenSessionEnded = {
+                sources.setWish("screen", SourceWish.Off)
+                ObserverForegroundService.refreshRunningCaptureTypes(context)
+            }
+            ObserverForegroundService.onScreenStorageBlocked = {
+                sources.setWish("screen", SourceWish.Off)
             }
         }
         ObserverForegroundService.onDestroyCallback = {
@@ -227,6 +252,8 @@ class ObserverAppContainer(
             val interruption = UnresolvedInterruptionStore(context.filesDir.resolve("audio-interruption").toPath())
             SpoolRoomReconciler(spoolDir, database.segmentDao()) { line -> Log.w("SpoolRoomReconciler", line) }.reconcile()
             captureSetup.recoverAudio(spoolDir, database.segmentDao(), interruption, captureSetup.inFlightAudioIds())
+            captureSetup.recoverScreen(spoolDir, database.segmentDao(),
+                UnresolvedInterruptionStore(context.filesDir.resolve("screen-interruption").toPath()), captureSetup.inFlightScreenIds())
             applyRecoveryActions(
                 RecoveryScanner(spoolDir).scan(System.currentTimeMillis()), interruption,
                 UnresolvedInterruptionStore(context.filesDir.resolve("other-interruption").toPath()),
@@ -425,6 +452,8 @@ internal class IdempotentPipelineLifecycle<T>(
     isVisibleOwnerPresent: () -> Boolean = { false },
     private val asyncExecutor: (Runnable) -> Unit = { it.run() },
     private val onRestartFinished: () -> Unit = {},
+    screenSessionLive: () -> Boolean = { false },
+    refreshWithoutStoppingService: () -> Unit = {},
 ) : ObserverLifecycle {
     private val lifecycleLock = Any()
     private val restartQueued = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -449,6 +478,8 @@ internal class IdempotentPipelineLifecycle<T>(
         destroySeam = destroySeam,
         isDesiredOn = isDesiredOn,
         isVisibleOwnerPresent = isVisibleOwnerPresent,
+        screenSessionLive = screenSessionLive,
+        refreshWithoutStoppingService = refreshWithoutStoppingService,
     )
 
     override fun restartCaptureForHeldTypes() {

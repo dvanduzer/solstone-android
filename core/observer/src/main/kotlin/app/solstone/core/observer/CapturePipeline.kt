@@ -52,6 +52,48 @@ class CapturePipeline(
         val startedEngines = mutableListOf<ContinuousSourceEngine>()
         try {
             engines.forEach { engine ->
+                if (engine is app.solstone.core.sources.SealWindowHoldClient) {
+                    engine.bindSealWindowHold(object : app.solstone.core.sources.SealWindowHold {
+                        override fun hold(stream: String, windowStartEpochMs: Long) {
+                            val future = executor.submit {
+                                segmenter.holdWindow(stream, windowStartEpochMs)
+                            }
+                            var interrupted = false
+                            try {
+                                while (true) {
+                                    try { future.get(); break } catch (_: InterruptedException) { interrupted = true }
+                                }
+                            } finally {
+                                if (interrupted) Thread.currentThread().interrupt()
+                            }
+                        }
+
+                        override fun feed(emission: app.solstone.core.sources.SourceEmission) {
+                            lastEmissionEpochMs = nowProvider()
+                            executor.execute {
+                                runDraining(sourceLabel(emission.sourceId)) { segmenter.feed(emission) }
+                            }
+                        }
+
+                        override fun releaseAfterFeed(emission: app.solstone.core.sources.SourceEmission) {
+                            lastEmissionEpochMs = nowProvider()
+                            executor.execute {
+                                runDraining(sourceLabel(emission.sourceId)) {
+                                    val result = segmenter.feed(emission)
+                                    val windowStart = segmenter.windowStart(emission.captureStartEpochMs)
+                                    segmenter.releaseWindow(emission.stream, windowStart)
+                                    result
+                                }
+                            }
+                        }
+
+                        override fun release(stream: String, windowStartEpochMs: Long) {
+                            executor.execute {
+                                segmenter.releaseWindow(stream, windowStartEpochMs)
+                            }
+                        }
+                    })
+                }
                 engine.start(
                     EmissionSink { emission ->
                         lastEmissionEpochMs = nowProvider()
@@ -131,9 +173,7 @@ class CapturePipeline(
             try {
                 sealedSink.persistSealed(segment, result, nowProvider())
             } catch (t: Throwable) {
-                emitDiag(
-                    "capture event=segment-orphaned recovery=SpoolRoomReconciler day=${segment.key.day} stream=${segment.stream} segment=${segment.key.segment} type=${t.javaClass.simpleName} message=${t.message ?: ""}",
-                )
+                emitDiag("capture event=segment-orphaned recovery=SpoolRoomReconciler day=${segment.key.day} stream=${segment.stream} segment=${segment.key.segment} type=${t.javaClass.simpleName} message=${t.message ?: ""}")
                 return@forEach
             }
             releasePayloads(segment.payloads)

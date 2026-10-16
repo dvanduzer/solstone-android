@@ -16,9 +16,13 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.net.Uri
+import android.media.projection.MediaProjectionManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import app.solstone.observer.formfactor.phone.ScreenToggleAction
+import app.solstone.observer.formfactor.phone.screenToggleRoute
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -156,6 +160,22 @@ class PhoneShellActivity : ComponentActivity() {
     private var pushDeliveryUnsubscribe: (() -> Unit)? = null
     @Volatile private var pushFactsStopped = false
     private var repairMemory = JournalPushRepairMemory()
+    private val screenConsentLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val data = result.data
+        if (result.resultCode == RESULT_OK && data != null) {
+            val generation = System.nanoTime()
+            ObserverForegroundService.offerScreenConsent(
+                app.solstone.platform.fgs.ScreenConsentToken(result.resultCode, data, generation),
+            )
+            val intent = Intent(this, ObserverForegroundService::class.java).apply {
+                putExtra(ObserverForegroundService.EXTRA_SCREEN_CONSENT, generation)
+            }
+            androidx.core.content.ContextCompat.startForegroundService(this, intent)
+            sourcesViewModel.refresh()
+        }
+    }
     /**
      * What the last `check connection` found, cleared when the shell leaves the foreground.
      *
@@ -732,8 +752,27 @@ class PhoneShellActivity : ComponentActivity() {
                 defaultDetailStatus = phoneDefaultDetailStatusOf(statusState),
                 onRefreshStatus = statusViewModel::refresh,
                 onToggle = { id, wish ->
-                    onSourceWish(id, wish)
-                    wishStoreState = wishStore.read()
+                    when (screenToggleRoute(id, wish, fromDetail = true)) {
+                        ScreenToggleAction.Proceed -> {
+                            onSourceWish(id, wish)
+                            wishStoreState = wishStore.read()
+                        }
+                        ScreenToggleAction.OpenDetail -> Unit
+                        ScreenToggleAction.LaunchConsent -> {
+                            val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+                            if (mediaProjectionManager != null) {
+                                screenConsentLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+                            }
+                        }
+                        ScreenToggleAction.TurnOff -> {
+                            container.sources.setWish("screen", SourceWish.Off)
+                            sourcesViewModel.refresh()
+                            ObserverForegroundService.screenSessionStopper?.invoke()
+                            ObserverForegroundService.refreshRunningCaptureTypes(this)
+                            (application as? PhoneApplication)?.applyEffectiveCapture(ownerTurnedSourceOff = true)
+                            wishStoreState = wishStore.read()
+                        }
+                    }
                 },
                 onStartObserving = {
                     // ⚠ Asking again is asking: this is `resume intake` and `start intake again`,

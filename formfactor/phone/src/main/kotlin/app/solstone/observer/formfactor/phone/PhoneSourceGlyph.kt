@@ -27,6 +27,7 @@ fun sourceGlyph(sourceId: String): Int = when (sourceId) {
     "audio" -> R.drawable.phone_source_audio
     "location" -> R.drawable.phone_source_location
     "camera" -> R.drawable.phone_source_camera
+    "screen" -> R.drawable.phone_source_screen
     else -> R.drawable.phone_add_more
 }
 

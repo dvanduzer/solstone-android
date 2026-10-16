@@ -121,8 +121,9 @@ class SourceRegistry(
         require(ids.size == ids.toSet().size) { "sourceId values must be unique" }
         when (val state = wishStore.read()) {
             is WishStoreState.Loaded -> {
-                persisted.putAll(state.wishes)
-                expressed.addAll(state.wishes.keys)
+                val loaded = state.wishes.filterKeys { it != "screen" }
+                persisted.putAll(loaded)
+                expressed.addAll(loaded.keys)
             }
             WishStoreState.Absent -> Unit
             WishStoreState.Unreadable -> {
@@ -144,7 +145,7 @@ class SourceRegistry(
                 // early while [storeUnreadable] — so unreadable bytes are never overwritten by a
                 // guess, only by an owner.
                 storeUnreadable = true
-                registrations.forEach {
+                registrations.filter { it.sourceId != "screen" }.forEach {
                     expressed.add(it.sourceId)
                     persisted[it.sourceId] = SourceWish.On
                 }
@@ -195,6 +196,11 @@ class SourceRegistry(
 
     /** ⚠ Call under [lock]. */
     private fun persistWish(sourceId: String, wish: SourceWish): WishSaveOutcome {
+        if (sourceId == "screen") {
+            wishes["screen"] = wish
+            expressed.add("screen")
+            return WishSaveOutcome.Committed
+        }
         val priorPersisted = persisted[sourceId]
         val priorExpressed = sourceId in expressed
         val priorWish = wishes[sourceId]
@@ -331,6 +337,11 @@ class SourceRegistry(
         if (storeUnreadable) return
         val changed = synchronized(lock) {
             if (sourceId !in expressed) return
+            if (sourceId == "screen") {
+                expressed.remove("screen")
+                wishes["screen"] = SourceWish.Off
+                return@synchronized true
+            }
             val priorPersisted = persisted[sourceId]
             val priorWish = wishes[sourceId]
             persisted.remove(sourceId)
@@ -366,7 +377,8 @@ class SourceRegistry(
     override fun requiredPermissions(sourceId: String): List<String> {
         val registration = bound.firstOrNull { it.sourceId == sourceId }?.registration ?: return emptyList()
         val type = registration.captureForegroundType ?: return emptyList()
-        return listOf(capturePermission(type))
+        val permission = capturePermission(type) ?: return emptyList()
+        return listOf(permission)
     }
 
     override fun subscribe(listener: SourcesChangeListener): SourcesSubscription {
@@ -398,7 +410,10 @@ class SourceRegistry(
 
     private inner class BoundSource(
         val registration: SourceRegistration,
-    ) : ContinuousSourceEngine {
+    ) : ContinuousSourceEngine, app.solstone.core.sources.SealWindowHoldClient {
+        override fun bindSealWindowHold(hold: app.solstone.core.sources.SealWindowHold) {
+            (registration.engine as? app.solstone.core.sources.SealWindowHoldClient)?.bindSealWindowHold(hold)
+        }
         val sourceId = registration.sourceId
         private val inner = registration.engine
         private val actuationLock = Any()
@@ -443,7 +458,7 @@ class SourceRegistry(
                 wishes.getValue(sourceId) to (sourceId in expressed)
             }
             val facts = if (wish == SourceWish.Off) {
-                offFacts()
+                offFacts().copy(forcedReason = registration.reasonWhenOff?.invoke())
             } else {
                 sourceFacts(globalFacts, permissionStatus)
             }.copy(

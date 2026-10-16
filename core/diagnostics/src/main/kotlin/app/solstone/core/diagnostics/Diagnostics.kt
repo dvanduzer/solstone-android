@@ -52,6 +52,7 @@ data class SourceFacts(
   // asking them this instant. Defaults false so a caller that models only the settled state keeps
   // its meaning.
   val permissionRequestInFlight: Boolean = false,
+  val forcedReason: ReasonCode? = null,
 )
 
 // NONE is correct for off, on, paused, and setting up. Only a needs-attention row with NONE is a
@@ -97,6 +98,7 @@ fun reduce(f: SourceFacts): Pair<SourceState, ReasonCode> =
         f.desiredOn && f.silenced == SilencedFact.SILENCED -> SourceState.PAUSED to ReasonCode.MICROPHONE_SILENCED
         f.desiredOn && f.engineStartIssued && !f.engineRunning -> SourceState.NEEDS_ATTENTION to ReasonCode.REBOOTED
         f.desiredOn && !f.engineStartIssued && !f.engineRunning -> SourceState.SETTING_UP to ReasonCode.NONE
+        f.forcedReason != null -> SourceState.NEEDS_ATTENTION to f.forcedReason
         !f.desiredOn -> SourceState.OFF to ReasonCode.NONE
         else -> SourceState.ON to ReasonCode.NONE
     }

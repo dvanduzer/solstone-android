@@ -18,6 +18,28 @@ import kotlin.test.assertTrue
 
 class AudioOffTurnTest {
     @Test
+    fun audioOffKeepsLiveScreenProjectionInTheServiceMask() {
+        var mask: Set<CaptureForegroundType>? = null
+        var stopped = false
+        performAudioOff(
+            registrationIds = listOf("audio", "screen"),
+            readStore = { WishStoreState.Loaded(mapOf("audio" to SourceWish.On, "screen" to SourceWish.On)) },
+            saveResolved = { WishSaveOutcome.Committed },
+            commitThroughRegistry = null,
+            microphoneGranted = true, cameraGranted = false, locationGranted = false,
+            declared = setOf(CaptureForegroundType.MICROPHONE, CaptureForegroundType.MEDIA_PROJECTION),
+            serviceHeld = true,
+            narrowRunningMask = { mask = it; MaskNarrowResult.Applied },
+            stop = { stopped = true }, recordOwnerStopped = { error("screen is still live") },
+            commitDesiredOff = { error("screen is still live") },
+            publishNotice = { error("unexpected notice: $it") }, clearNotice = {},
+            mediaProjectionPromotable = true,
+        )
+        assertFalse(stopped)
+        assertEquals(setOf(CaptureForegroundType.MEDIA_PROJECTION), mask)
+    }
+
+    @Test
     fun coldUnreadableWithRemainingSourceNarrowsMask() {
         var savedWishes: Map<String, SourceWish>? = null
         var narrowedTypes: Set<CaptureForegroundType>? = null

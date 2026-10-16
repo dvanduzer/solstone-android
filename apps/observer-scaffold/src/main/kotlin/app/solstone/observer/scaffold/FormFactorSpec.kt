@@ -23,4 +23,5 @@ data class FormFactorSpec(
     val ownerButtonStyle: ((Button) -> Unit)? = null,
     val ownerTextStyle: ((TextView) -> Unit)? = null,
     val matchForegroundTypesToWishes: Boolean = false,
+    val registerScreenSource: Boolean = false,
 )

@@ -5,7 +5,8 @@ Regenerated from the app manifests — when a manifest's service declaration or 
 This is a source-reference matrix. Phone is the sole maintained Android target; the watch, glasses/Rokid, and Rogbid entries document retained parked source and hardware evidence.
 
 Per-app `foregroundServiceType` (never the data-sync type):
-- `apps/phone` and `apps/watch`: `microphone|location|camera`
+- `apps/phone`: `microphone|location|camera|mediaProjection`
+- `apps/watch`: `microphone|location|camera`
 - `apps/glasses`: `microphone|camera` (the RV203 has no GPS/network location provider)
 - `apps/validation-rogbid` (hardware-validation target, not an observer app): `camera|microphone`
 
@@ -19,9 +20,10 @@ API 33:
 - Start the observer engine only from the visible launcher after the runtime permissions are granted.
 
 API 34+:
-- Adds `FOREGROUND_SERVICE_MICROPHONE` and `FOREGROUND_SERVICE_CAMERA` everywhere, plus `FOREGROUND_SERVICE_LOCATION` on phone/watch.
+- Adds `FOREGROUND_SERVICE_MICROPHONE` and `FOREGROUND_SERVICE_CAMERA` everywhere, plus `FOREGROUND_SERVICE_LOCATION` on phone/watch, and `FOREGROUND_SERVICE_MEDIA_PROJECTION` on phone.
 - The service declaration must carry exactly the per-app type list above.
 - Microphone, camera, and location access are while-in-use; start the service only from a visible activity or widget/notification action after runtime permissions are granted.
+- Media projection is a manifest permission with no runtime permission and is not started from boot, rehydrate, or a widget.
 
 Location behavior:
 - Location permission is requested in the launcher alongside audio (phone/watch only).

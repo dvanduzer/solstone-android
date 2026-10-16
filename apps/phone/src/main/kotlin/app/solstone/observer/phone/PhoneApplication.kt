@@ -111,7 +111,7 @@ class PhoneApplication : ObserverApplication(
         super.onCreate()
         ObserverForegroundService.captureWishTypes = {
             val store = FileSourceWishStore(filesDir.resolve("source-wishes"))
-            when (val read = store.read()) {
+            val base = when (val read = store.read()) {
                 is WishStoreState.Unreadable -> null
                 WishStoreState.Absent -> emptySet()
                 is WishStoreState.Loaded -> {
@@ -122,6 +122,11 @@ class PhoneApplication : ObserverApplication(
                     if (wishes["camera"] == SourceWish.On) set.add(CaptureForegroundType.CAMERA)
                     set
                 }
+            }
+            if (ObserverForegroundService.isSessionPromotable()) {
+                if (base != null) base + CaptureForegroundType.MEDIA_PROJECTION else null
+            } else {
+                base
             }
         }
         audioOffNotices = PhoneAudioOffNoticeStore(applicationContext)
@@ -234,6 +239,7 @@ class PhoneApplication : ObserverApplication(
             locationGranted = permissions.locationGranted,
             declared = declared,
             serviceHeld = serviceHeld,
+            mediaProjectionPromotable = ObserverForegroundService.isSessionPromotable(),
             narrowRunningMask = { ObserverForegroundService.narrowRunningMask(it) },
             stop = { endSession ->
                 if (serviceHeld) {
@@ -259,6 +265,15 @@ class PhoneApplication : ObserverApplication(
     }
 
     internal fun applyEffectiveCapture(ownerTurnedSourceOff: Boolean) {
+        // Consent handoff and service entry run on main. Serialize resume reconciliation
+        // with them so an off snapshot cannot stop a newly requested foreground service.
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                applyEffectiveCapture(ownerTurnedSourceOff)
+            }
+            return
+        }
+        if (ObserverForegroundService.screenConsentToken != null) return
         val container = runtime.containerIfInitialized ?: return
         val permissions = container.controller.permissionStatus
         val declared = ObserverForegroundService.declaredCaptureForegroundTypes ?: emptySet()
@@ -273,6 +288,7 @@ class PhoneApplication : ObserverApplication(
             declared = declared,
             wishedOn = wishedTypes,
             liveHeld = ObserverForegroundService.heldCaptureForegroundTypes,
+            mediaProjectionPromotable = ObserverForegroundService.isSessionPromotable(),
         )
 
         if (plan.endSession) {
@@ -331,6 +347,7 @@ class PhoneApplication : ObserverApplication(
         // ⚠ Recorded BEFORE the stop, so a process death between the two cannot lose the owner's
         // decision and leave resume free to restart intake.
         OwnerStoppedStore(this).recordStopped()
+        ObserverForegroundService.clearScreenConsent()
         runtime.containerIfInitialized?.controller?.stop()
     }
 
@@ -342,6 +359,7 @@ class PhoneApplication : ObserverApplication(
         (container as? ObserverAppContainer)?.let { app ->
             val stopped = OwnerStoppedStore(this)
             app.ownerStoppedProvider = { stopped.ownerStopped() }
+            app.onScreenOwnerStart = { stopped.clear() }
             app.phoneResumeHandler = { handlePhoneResume(app) }
         }
         container.controller.onEffectiveCaptureEmpty = {

@@ -20,6 +20,22 @@ import kotlin.test.assertTrue
 
 class SegmentTest {
     @Test
+    fun independentVideoDoesNotExtendAudioBoundsAndKeepsItsCaptureZone() {
+        val grid = 1_800_000_000_000L
+        val segmenter = Segmenter(ZoneId.of("UTC"))
+        segmenter.feed(SourceEmission("audio", MAIN_STREAM, SourceKind.OBSERVER, grid, grid + 20_000L,
+            listOf(PayloadRef("audio.m4a", "audio/mp4", 4, null)), emptyMap(), emptyList()))
+        val first = grid + 90_000L
+        segmenter.feed(SourceEmission("screen", MAIN_STREAM, SourceKind.OBSERVER, first, grid + 300_000L,
+            listOf(PayloadRef("screen.mp4", "video/mp4", 4, null)),
+            mapOf("zoneId" to "America/Denver", "utcOffsetSeconds" to "-25200"), emptyList(), independentTimeline = true))
+        val segments = segmenter.flush().sealed
+        assertEquals(2, segments.size)
+        assertEquals(wireKeys(grid, grid + 20_000L, ZoneId.of("UTC")), segments[0].wireKeys)
+        assertEquals(wireKeys(first, grid + 300_000L, ZoneId.of("America/Denver")), segments[1].wireKeys)
+    }
+
+    @Test
     fun wireKeysUseAsciiGregorianTimeUnderDeviceLocales() {
         val originalLocale = Locale.getDefault()
         try {

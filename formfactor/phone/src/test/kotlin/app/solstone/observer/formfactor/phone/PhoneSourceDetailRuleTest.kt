@@ -140,6 +140,7 @@ class PhoneSourceDetailRuleTest {
                 false,
             ),
             ExpectedRule(ReasonCode.INTAKE_STOPPED_UNEXPECTEDLY, "other sources stopped unexpectedly", null, false),
+            ExpectedRule(ReasonCode.SCREEN_CAPTURE_FAILED, "the recording couldn't be saved", null, false),
         )
 
         expected.forEach { expectedRule ->

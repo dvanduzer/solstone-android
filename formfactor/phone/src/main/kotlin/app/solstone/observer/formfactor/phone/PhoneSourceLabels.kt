@@ -11,6 +11,7 @@ internal val phoneSourceLabels: Map<String, String> = mapOf(
     "audio" to "audio",
     "location" to "location",
     "camera" to "camera",
+    "screen" to "screen",
 )
 
 fun sourceLabel(sourceId: String): String = phoneSourceLabels[sourceId] ?: sourceId

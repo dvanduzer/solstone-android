@@ -99,6 +99,10 @@ class PhoneObserverNotificationRuntimeTest {
         // gate runs registers audio and location only, and has no camera source at all.
         container.sources.setWish("location", SourceWish.On)
 
+        // A consent result waiting for service delivery must not undo this later owner Stop.
+        ObserverForegroundService.offerScreenConsent(
+            app.solstone.platform.fgs.ScreenConsentToken(android.app.Activity.RESULT_OK, Intent(), 42L),
+        )
         val stopIntent = Intent(context, PhoneObserverStopReceiver::class.java)
         context.sendBroadcast(stopIntent)
 
@@ -115,6 +119,8 @@ class PhoneObserverNotificationRuntimeTest {
         waitUntil("service notification removed") { serviceNotification() == null }
 
         assertFalse(container.controller.desiredOn)
+        assertNull(ObserverForegroundService.screenConsentToken)
+        assertTrue(OwnerStoppedStore(context).ownerStopped())
         val locationStatus = container.sources.snapshot().sources.singleOrNull { it.sourceId == "location" }
         assertEquals(SourceWish.On, locationStatus?.wish)
         }

@@ -50,6 +50,7 @@ dependencies {
     implementation(project(":platform:work"))
     implementation(project(":platform:camera-still"))
     add("realImplementation", project(":platform:audio"))
+    add("realImplementation", project(":platform:screen"))
     add("realImplementation", project(":platform:location"))
     add("realImplementation", project(":platform:camera-legacy"))
     add("realImplementation", project(":platform:camera2"))
