@@ -24,6 +24,59 @@ import kotlin.test.assertTrue
  */
 class ExpressedWishStoreTest {
     @Test
+    fun screenSessionIsRememberedOffAndNeverResumesAfterRegistryRecreation() {
+        val store = InMemorySourceWishStore(mapOf("camera" to SourceWish.Off))
+        fun fresh(): SourceRegistry {
+            val f = fixture(permissionStatus = allDenied(), snapshot = snapshot())
+            return SourceRegistry(f.controller,
+                listOf(SourceRegistration("screen", FakeSourceEngine(conditionValue = running()),
+                    captureForegroundType = CaptureForegroundType.MEDIA_PROJECTION)),
+                MainPoster { it() }, store)
+        }
+        val original = fresh()
+        original.setWish("screen", SourceWish.On)
+        assertEquals(SourceWish.On, original.snapshot().sources.single().wish)
+        assertEquals(mapOf("camera" to SourceWish.Off, "screen" to SourceWish.Off),
+            (store.read() as WishStoreState.Loaded).wishes)
+        val restarted = fresh().snapshot().sources.single()
+        assertEquals(SourceWish.Off, restarted.wish)
+        assertEquals(SourceState.OFF, restarted.state)
+        assertTrue(restarted.wishExpressed)
+
+        // A stale On entry is history of a prior session, never fresh OS consent.
+        store.saveAll(mapOf("screen" to SourceWish.On))
+        assertEquals(SourceState.OFF, fresh().snapshot().sources.single().state)
+    }
+
+    @Test
+    fun endingScreenStillStopsTheEngineWhenTheWishStoreCanNoLongerWrite() {
+        val store = object : SourceWishStore {
+            var saved: Map<String, SourceWish> = emptyMap()
+            var fail = false
+            override fun read(): WishStoreState = WishStoreState.Loaded(saved)
+            override fun saveAll(wishes: Map<String, SourceWish>): WishSaveOutcome {
+                if (fail) return WishSaveOutcome.OriginalIntact
+                saved = wishes
+                return WishSaveOutcome.Committed
+            }
+        }
+        val f = fixture(permissionStatus = allDenied(), snapshot = snapshot())
+        val engine = FakeSourceEngine(conditionValue = running())
+        val registry = SourceRegistry(f.controller,
+            listOf(SourceRegistration("screen", engine, captureForegroundType = CaptureForegroundType.MEDIA_PROJECTION)),
+            MainPoster { it() }, store)
+        registry.setWish("screen", SourceWish.On)
+        registry.engines.single().start(EmissionSink {})
+        assertEquals(1, engine.startCalls)
+        store.fail = true
+        assertFalse(registry.setWish("screen", SourceWish.Off) is SourceToggleResult.NotSaved)
+        assertEquals(1, engine.stopCalls)
+        assertEquals(SourceState.OFF, registry.snapshot().sources.single().state)
+        assertEquals(SourceWish.Off, registry.snapshot().sources.single().wish)
+        assertEquals(mapOf("screen" to SourceWish.Off), store.saved)
+    }
+
+    @Test
     fun oneOwnerActWritesOneEntry() {
         val store = InMemorySourceWishStore()
         val registry = registry(store, allDenied())

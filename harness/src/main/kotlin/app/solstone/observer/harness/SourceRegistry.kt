@@ -121,7 +121,7 @@ class SourceRegistry(
         require(ids.size == ids.toSet().size) { "sourceId values must be unique" }
         when (val state = wishStore.read()) {
             is WishStoreState.Loaded -> {
-                val loaded = state.wishes.filterKeys { it != "screen" }
+                val loaded = state.wishes.mapValues { (id, wish) -> if (id == "screen") SourceWish.Off else wish }
                 persisted.putAll(loaded)
                 expressed.addAll(loaded.keys)
             }
@@ -196,15 +196,18 @@ class SourceRegistry(
 
     /** ⚠ Call under [lock]. */
     private fun persistWish(sourceId: String, wish: SourceWish): WishSaveOutcome {
-        if (sourceId == "screen") {
-            wishes["screen"] = wish
-            expressed.add("screen")
+        if (sourceId == "screen" && wish == SourceWish.Off) {
+            // Ending consent must not depend on another disk write. A successful start
+            // already persisted Off; keep that history while clearing the live wish.
+            wishes[sourceId] = SourceWish.Off
+            expressed.add(sourceId)
             return WishSaveOutcome.Committed
         }
         val priorPersisted = persisted[sourceId]
         val priorExpressed = sourceId in expressed
         val priorWish = wishes[sourceId]
-        persisted[sourceId] = wish
+        // Remember that screen was set up, but never persist a restartable On session.
+        persisted[sourceId] = if (sourceId == "screen") SourceWish.Off else wish
         wishes[sourceId] = wish
         expressed.add(sourceId)
         val outcome = wishStore.saveAll(persisted.toMap())
