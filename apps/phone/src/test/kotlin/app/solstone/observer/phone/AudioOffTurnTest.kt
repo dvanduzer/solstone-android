@@ -18,6 +18,29 @@ import kotlin.test.assertTrue
 
 class AudioOffTurnTest {
     @Test
+    fun audioOffWithNoLiveServicePreservesTheRemainingLocationWish() {
+        var saved: Map<String, SourceWish>? = null
+        var cleared = false
+        performAudioOff(
+            registrationIds = listOf("audio", "location"),
+            readStore = { WishStoreState.Loaded(mapOf("audio" to SourceWish.On, "location" to SourceWish.On)) },
+            saveResolved = { saved = it; WishSaveOutcome.Committed },
+            commitThroughRegistry = null,
+            microphoneGranted = true, cameraGranted = false, locationGranted = true,
+            declared = setOf(CaptureForegroundType.MICROPHONE, CaptureForegroundType.LOCATION),
+            serviceHeld = false,
+            narrowRunningMask = { error("there is no live mask to narrow") },
+            stop = { error("location is still wished on") },
+            recordOwnerStopped = { error("audio off does not stop location") },
+            commitDesiredOff = { error("audio off does not stop location") },
+            publishNotice = { error("unexpected notice: $it") },
+            clearNotice = { cleared = true },
+        )
+        assertEquals(mapOf("audio" to SourceWish.Off, "location" to SourceWish.On), saved)
+        assertTrue(cleared)
+    }
+
+    @Test
     fun audioOffKeepsLiveScreenProjectionInTheServiceMask() {
         var mask: Set<CaptureForegroundType>? = null
         var stopped = false

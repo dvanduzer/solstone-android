@@ -210,19 +210,38 @@ class PhoneObserverNotificationRuntimeTest {
 
     @Test
     fun stoppedNotification102NotPostedWhenAudioStopsWhileAnotherSourceIsOn() {
-        val manager = context.getSystemService(NotificationManager::class.java)
-        manager.cancel(ObserverNotification.BOOT_NOTIFICATION_ID)
+        ActivityScenario.launch(app.solstone.observer.scaffold.ObserverActivity::class.java).use {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            val container = obtainObserverContainer()
+            assertTrue(waitForRecovery(container))
+            container.sources.setWish("audio", SourceWish.On)
+            container.sources.setWish("location", SourceWish.On)
+            assertTrue(container.controller.start())
+            waitUntil("live audio and location before audio off") {
+                serviceNotification() != null && ObserverForegroundService.heldCaptureForegroundTypes == setOf(
+                    app.solstone.platform.fgs.CaptureForegroundType.MICROPHONE,
+                    app.solstone.platform.fgs.CaptureForegroundType.LOCATION,
+                )
+            }
+            manager.cancel(ObserverNotification.BOOT_NOTIFICATION_ID)
+            waitUntil("inactive notification absent before audio off") {
+                manager.activeNotifications.none { it.id == ObserverNotification.BOOT_NOTIFICATION_ID }
+            }
 
-        val container = obtainObserverContainer()
-        assertTrue(waitForRecovery(container))
-        container.sources.setWish("audio", SourceWish.On)
-        container.sources.setWish("location", SourceWish.On)
-
-        // Turn only audio off
-        application.turnAudioOffFromWidget()
-
-        val attentionNotif = manager.activeNotifications.firstOrNull { it.id == ObserverNotification.BOOT_NOTIFICATION_ID }
-        assertNull(attentionNotif)
+            application.turnAudioOffFromWidget()
+            assertTrue(container.awaitBackgroundIdle())
+            assertTrue(awaitMainLooper())
+            waitUntil("only location remains in the foreground mask") {
+                ObserverForegroundService.heldCaptureForegroundTypes == setOf(app.solstone.platform.fgs.CaptureForegroundType.LOCATION)
+            }
+            val sources = container.sources.snapshot().sources
+            assertEquals(SourceWish.Off, sources.single { it.sourceId == "audio" }.wish)
+            assertEquals(SourceWish.On, sources.single { it.sourceId == "location" }.wish)
+            assertEquals(app.solstone.core.model.SourceState.ON, sources.single { it.sourceId == "location" }.state)
+            assertTrue(container.controller.desiredOn)
+            assertNotNull(serviceNotification())
+            assertNull(manager.activeNotifications.firstOrNull { it.id == ObserverNotification.BOOT_NOTIFICATION_ID })
+        }
     }
 
     @Test
