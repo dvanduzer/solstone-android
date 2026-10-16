@@ -97,6 +97,18 @@ class Segmenter(
     fun feed(emission: SourceEmission): SegmenterResult {
         val stream = emission.stream
         val windowStartEpochMs = windowStart(emission.captureStartEpochMs)
+        if (emission.independentTimeline) {
+            // Closed media owns its first-sample timeline. It neither waits for
+            // nor advances the watermark of the shared source windows.
+            val zone = emission.metadata["zoneId"]?.let { runCatching { ZoneId.of(it) }.getOrNull() }
+                ?: resolveBucketZone(windowStartEpochMs)
+            val keys = wireKeys(emission.captureStartEpochMs, emission.captureEndEpochMs, zone)
+            val mediaKeys = keys.copy(utcOffsetSeconds =
+                emission.metadata["utcOffsetSeconds"]?.toIntOrNull() ?: keys.utcOffsetSeconds)
+            return SegmenterResult(listOf(SealedSegment(stream, SegmentKey(mediaKeys.day, mediaKeys.segment),
+                mediaKeys, emission.payloadRefs.map { ref -> SegmentPayload(emission.sourceId, ref,
+                    emission.captureStartEpochMs, emission.captureEndEpochMs) }, emission.gaps)), emptyList())
+        }
         val watermark = sealedWatermark[stream]
         if (watermark != null && windowStartEpochMs <= watermark) {
             val droppedPayloads = emission.payloadRefs.map { ref ->
@@ -137,9 +149,7 @@ class Segmenter(
                 zoneId = resolveBucketZone(windowStartEpochMs),
             )
         }
-        if (!emission.independentTimeline) {
-            bucket.maxCaptureEndEpochMs = maxOf(bucket.maxCaptureEndEpochMs, emission.captureEndEpochMs)
-        }
+        bucket.maxCaptureEndEpochMs = maxOf(bucket.maxCaptureEndEpochMs, emission.captureEndEpochMs)
         val incoming = emission.payloadRefs.map { ref ->
             SegmentPayload(
                 sourceId = emission.sourceId,
@@ -148,11 +158,7 @@ class Segmenter(
                 captureEndEpochMs = emission.captureEndEpochMs,
             )
         }
-        if (emission.independentTimeline) {
-            val zone = emission.metadata["zoneId"]?.let { runCatching { ZoneId.of(it) }.getOrNull() } ?: bucket.zoneId
-            incoming.forEach { bucket.anchoredPayloads += AnchoredPayload(it, zone,
-                emission.metadata["utcOffsetSeconds"]?.toIntOrNull()) }
-        } else bucket.payloads += incoming
+        bucket.payloads += incoming
         bucket.gaps += emission.gaps
         return SegmenterResult(
             sealed = sealWindowsBefore(stream, emission.captureStartEpochMs),
@@ -259,16 +265,8 @@ class Segmenter(
             result += SealedSegment(stream, SegmentKey(keys.day, keys.segment), keys, payloads.toList(),
                 gaps.sortedWith(compareBy<GapEvent> { it.atEpochMs }.thenBy { it.kind }.thenBy { it.detail ?: "" }))
         }
-        anchoredPayloads.forEach { anchored ->
-            val payload = anchored.payload
-            val calculated = wireKeys(payload.captureStartEpochMs, payload.captureEndEpochMs, anchored.zone)
-            val mediaKeys = calculated.copy(utcOffsetSeconds = anchored.utcOffsetSeconds ?: calculated.utcOffsetSeconds)
-            result += SealedSegment(stream, SegmentKey(mediaKeys.day, mediaKeys.segment), mediaKeys, listOf(payload), emptyList())
-        }
         return result
     }
-
-    private data class AnchoredPayload(val payload: SegmentPayload, val zone: ZoneId, val utcOffsetSeconds: Int?)
 
     private data class WindowKey(val stream: String, val windowStartEpochMs: Long)
 
@@ -277,7 +275,6 @@ class Segmenter(
         val windowStartEpochMs: Long,
         val zoneId: ZoneId,
         val payloads: MutableList<SegmentPayload> = mutableListOf(),
-        val anchoredPayloads: MutableList<AnchoredPayload> = mutableListOf(),
         val gaps: MutableList<GapEvent> = mutableListOf(),
         var maxCaptureEndEpochMs: Long = windowStartEpochMs,
     )

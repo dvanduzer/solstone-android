@@ -16,7 +16,8 @@ data class SourceEmission(
   val payloadRefs: List<PayloadRef>,
   val metadata: Map<String, String>,
   val gaps: List<GapEvent>,
-  // Media whose container starts at zero needs a wire key anchored at its first sample.
+  // Closed media seals immediately at its first-sample wire identity,
+  // independently of shared source windows and their watermark.
   val independentTimeline: Boolean = false,
 )
 

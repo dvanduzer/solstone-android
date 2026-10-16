@@ -34,4 +34,5 @@ dependencies {
     implementation(project(":platform:persistence-room"))
     testImplementation(kotlin("test"))
     testImplementation(project(":testing"))
+    testImplementation(project(":core:observer"))
 }

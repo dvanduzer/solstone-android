@@ -11,8 +11,6 @@ import app.solstone.core.sources.ContinuousSourceEngine
 import app.solstone.core.sources.EmissionSink
 import app.solstone.core.sources.MAIN_STREAM
 import app.solstone.core.sources.PayloadRef
-import app.solstone.core.sources.SealWindowHold
-import app.solstone.core.sources.SealWindowHoldClient
 import app.solstone.core.sources.SourceCondition
 import app.solstone.core.sources.SourceEmission
 import app.solstone.core.spool.PayloadBytesProvider
@@ -28,8 +26,13 @@ import java.nio.file.StandardOpenOption
 import java.time.Instant
 import java.time.ZoneId
 import java.util.UUID
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 class ScreenContinuousSourceEngine(
     private val outputDirectory: File,
@@ -45,20 +48,33 @@ class ScreenContinuousSourceEngine(
     private val zoneProvider: () -> ZoneId = { ZoneId.systemDefault() },
     private val diag: (String) -> Unit = {},
     private val stopJoinTimeoutMs: Long = 10_000L,
-) : ContinuousSourceEngine, PayloadBytesProvider, SealWindowHoldClient {
+) : ContinuousSourceEngine, PayloadBytesProvider {
     private val running = AtomicBoolean(false)
     private val lifecycleLock = Any()
     @Volatile private var worker: Thread? = null
+    @Volatile private var activeRun: Run? = null
     private var pendingStart: EmissionSink? = null
-    @Volatile private var hold: SealWindowHold? = null
     @Volatile private var failedReason: ReasonCode? = null
-    @Volatile private var activeId: String? = null
     private data class Key(val start: Long, val end: Long)
     private data class Attempt(val id: String, val dir: File)
+    private val attempts = ConcurrentHashMap<String, Attempt>()
     private val registered = ConcurrentHashMap<Key, Attempt>()
 
-    fun inFlightRecordingIds(): Set<String> = registered.values.map { it.id }.toSet() + listOfNotNull(activeId)
-    override fun bindSealWindowHold(hold: SealWindowHold) { this.hold = hold }
+    private class Run(val generation: Long, val control: Thread) {
+        val ended = AtomicBoolean(false)
+        val failure = AtomicReference<Throwable?>(null)
+        val cutoff = AtomicLong(Long.MAX_VALUE)
+        val interruptLock = Any()
+        var captureLoop = false
+        @Volatile var floor = false
+        @Volatile var failed = false
+        // One running finalizer and one stopped prefix at most. Attempts retain
+        // their slots after enqueue until spool AND persistence release them.
+        val finalizer = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+            ArrayBlockingQueue<Runnable>(1), { task -> Thread(task, "ScreenSourceFinalizer") })
+    }
+
+    fun inFlightRecordingIds(): Set<String> = attempts.keys.toSet()
     fun reasonWhenOff(): ReasonCode? = when {
         !storageStatus.isStorageOk() -> ReasonCode.STORAGE_FULL
         failedReason != null -> failedReason
@@ -70,32 +86,42 @@ class ScreenContinuousSourceEngine(
         synchronized(lifecycleLock) {
             if (!sessionHolder.isSessionLive()) return
             if (worker?.isAlive == true) {
-                if (!running.get()) pendingStart = sink
+                if (!running.get() || activeRun?.generation != sessionHolder.generation()) {
+                    running.set(false)
+                    pendingStart = sink
+                    activeRun?.let(::interruptCapture)
+                }
                 return
             }
             running.set(true)
             failedReason = null
             outputDirectory.mkdirs()
-            val generation = sessionHolder.generation()
-            worker = Thread({ runWorker(sink, generation) }, "ScreenSourceEngineWorker").also { it.start() }
+            lateinit var run: Run
+            val thread = Thread({ runWorker(sink, run) }, "ScreenSourceEngineWorker")
+            run = Run(sessionHolder.generation(), thread)
+            activeRun = run
+            worker = thread
+            thread.start()
         }
     }
 
     override fun stop() {
-        val thread = synchronized(lifecycleLock) {
+        val pair = synchronized(lifecycleLock) {
             running.set(false)
             pendingStart = null
-            worker
+            worker to activeRun
         }
+        pair.second?.let(::endCapture)
+        val thread = pair.first
         if (thread !== Thread.currentThread()) {
-            thread?.interrupt()
+            pair.second?.let(::interruptCapture)
             thread?.join(stopJoinTimeoutMs)
         }
     }
 
     override fun condition() = SourceCondition(
         desiredOn = true,
-        running = running.get() && sessionHolder.isSessionLive(),
+        running = running.get() && sessionHolder.isSessionLive() && activeRun?.generation == sessionHolder.generation(),
         available = storageStatus.isStorageOk(),
         needsAttention = reasonWhenOff() != null,
         paused = false,
@@ -107,43 +133,84 @@ class ScreenContinuousSourceEngine(
             ScreenConstants.PAYLOAD_NAME).inputStream()
 
     override fun release(payload: SegmentPayload) {
-        registered.remove(Key(payload.captureStartEpochMs, payload.captureEndEpochMs))?.dir?.deleteRecursively()
+        registered.remove(Key(payload.captureStartEpochMs, payload.captureEndEpochMs))?.let {
+            attempts.remove(it.id)
+            it.dir.deleteRecursively()
+        }
     }
 
     override fun discardUncommitted(payload: SegmentPayload): Boolean {
-        // Keep the independently held attempt for recovery; a watermark is not durable custody.
+        // Neither a watermark nor a completed finalizer is durable custody.
+        // Keep the capacity/protection entry for initialization recovery after restart.
         interruption.markUnresolved()
         registered.remove(Key(payload.captureStartEpochMs, payload.captureEndEpochMs))
         return false
     }
 
-    private fun runWorker(sink: EmissionSink, generation: Long) {
-        var floor = false
-        var failed = false
+    private fun shouldRun(run: Run) = running.get() && sessionHolder.isSessionLive() &&
+        sessionHolder.generation() == run.generation && run.failure.get() == null
+
+    private fun interruptCapture(run: Run) = synchronized(run.interruptLock) {
+        if (run.captureLoop) run.control.interrupt()
+    }
+
+    private fun endCapture(run: Run) {
+        run.cutoff.compareAndSet(Long.MAX_VALUE, nowProvider())
+        synchronized(lifecycleLock) {
+            if (activeRun === run) running.set(false)
+        }
+        if (run.ended.compareAndSet(false, true) && sessionHolder.stopIfGeneration(run.generation)) {
+            // Storage attention follows actual free space after it recovers.
+            synchronized(lifecycleLock) {
+                if (activeRun === run) {
+                    failedReason = if (run.failed || run.failure.get() != null) ReasonCode.SCREEN_CAPTURE_FAILED else null
+                }
+            }
+            if (run.floor) onFloorTripped?.invoke()
+            else if (run.failed || run.failure.get() != null) onFailed?.invoke()
+        }
+    }
+
+    private fun fail(run: Run, error: Throwable) {
+        run.failure.compareAndSet(null, error)
+        run.failed = true
+        interruption.markUnresolved()
+        runCatching { diag("screen event=failed type=${error.javaClass.simpleName}") }
+        endCapture(run)
+        if (run.control !== Thread.currentThread()) interruptCapture(run)
+    }
+
+    private fun runWorker(sink: EmissionSink, run: Run) {
+        var pending: (() -> Unit)? = null
         try {
-            while (running.get() && sessionHolder.isSessionLive() && sessionHolder.generation() == generation) {
-                if (!storageStatus.isStorageOk()) { floor = true; break }
+            while (shouldRun(run)) {
+                if (!storageStatus.isStorageOk()) { run.floor = true; break }
+                if (attempts.size >= MAX_ATTEMPTS) { run.failed = true; break }
                 val display = sessionHolder.currentVirtualDisplay.get() ?: break
                 val geometry = sessionHolder.currentGeometry.get() ?: break
                 val end = windowStart(nowProvider()) + ScreenConstants.WINDOW_MS
-                recordPortion(sink, display, geometry, end)
-                if (!storageStatus.isStorageOk()) { floor = true; break }
+                val finish = capturePortion(sink, run, display, geometry, end)
+                pending = finish
+                run.finalizer.execute { try { finish() } catch (t: Throwable) { fail(run, t) } }
+                pending = null
             }
         } catch (_: InterruptedException) {
-            // The portion's finally block has already stopped, detached and adopted its prefix.
+            // A stop/failure has already ended the owning projection.
         } catch (t: Throwable) {
-            diag("screen event=failed type=${t.javaClass.simpleName}")
-            interruption.markUnresolved()
-            failed = true
+            fail(run, t)
         } finally {
-            running.set(false)
-            activeId = null
-            if ((floor || failed) && sessionHolder.stopIfGeneration(generation)) {
-                failedReason = if (floor) ReasonCode.STORAGE_FULL else ReasonCode.SCREEN_CAPTURE_FAILED
-                if (floor) onFloorTripped?.invoke() else onFailed?.invoke()
+            endCapture(run)
+            run.finalizer.shutdown()
+            // Public stop has a bounded join. This stopped worker may remain
+            // behind a deliberately blocked dependency, without another encoder.
+            while (true) {
+                try {
+                    if (run.finalizer.awaitTermination(1L, TimeUnit.DAYS)) break
+                } catch (_: InterruptedException) { /* finish durable cleanup */ }
             }
+            pending?.let { try { it() } catch (t: Throwable) { fail(run, t) } }
             synchronized(lifecycleLock) {
-                if (worker === Thread.currentThread()) worker = null
+                if (worker === Thread.currentThread()) { worker = null; activeRun = null }
                 val next = pendingStart
                 pendingStart = null
                 if (next != null && sessionHolder.isSessionLive()) start(next)
@@ -151,13 +218,16 @@ class ScreenContinuousSourceEngine(
         }
     }
 
-    private fun recordPortion(sink: EmissionSink, display: ScreenVirtualDisplay, geometry: ScreenGeometry, windowEnd: Long) {
+    private fun capturePortion(sink: EmissionSink, run: Run, display: ScreenVirtualDisplay,
+        geometry: ScreenGeometry, windowEnd: Long): () -> Unit {
         val start = nowProvider()
         val grid = windowStart(start)
         val zone = zoneProvider()
         val id = "rec-${UUID.randomUUID()}"
         val dir = File(outputDirectory, id)
         check(dir.mkdirs())
+        val attempt = Attempt(id, dir)
+        attempts[id] = attempt
         val raw = File(dir, "capture.h264")
         val index = File(dir, "samples.idx")
         val record = File(dir, "record.txt")
@@ -165,18 +235,24 @@ class ScreenContinuousSourceEngine(
         var info = ScreenRecordInfo(id, start, zone.id, zone.rules.getOffset(Instant.ofEpochMilli(start)).totalSeconds,
             grid, windowEnd, geometry.width, geometry.height)
         val recordLock = Any()
-        check(writeAndForceRecordTxt(record, info)) { "screen metadata unavailable" }
-        activeId = id
-        val coordinator = hold
-        var held = false
+        try {
+            check(writeAndForceRecordTxt(record, info)) { "screen metadata unavailable" }
+        } catch (t: Throwable) {
+            // No encoder or payload exists yet.
+            dir.deleteRecursively()
+            attempts.remove(id)
+            throw t
+        }
         var encoder: ScreenEncoder? = null
-        val firstFrame = java.util.concurrent.atomic.AtomicReference<Long?>(null)
+        val firstFrame = AtomicReference<Long?>(null)
         var wasInterrupted = false
         var recordingFailure: Throwable? = null
+        var cutoffError: Throwable? = null
+        var stopError: Throwable? = null
+        var drainError: Throwable? = null
+        var drainMs = 0L
         try {
-            coordinator?.hold(MAIN_STREAM, grid)
-            held = coordinator != null
-            if (!running.get()) throw InterruptedException()
+            if (!shouldRun(run)) throw InterruptedException()
             encoder = encoderFactory.create(geometry.width, geometry.height, ScreenConstants.BIT_RATE, ScreenConstants.FRAME_RATE)
             encoder.start(raw, index) { first ->
                 firstFrame.set(first)
@@ -186,8 +262,10 @@ class ScreenContinuousSourceEngine(
                 }
             }
             display.setSurface(encoder.inputSurface())
-            while (running.get() && sessionHolder.isSessionLive() && nowProvider() < windowEnd &&
-                storageStatus.isStorageOk() && sessionHolder.currentGeometry.get() == geometry && !encoder.sizeLimitReached()) {
+            synchronized(run.interruptLock) { run.captureLoop = true }
+            while (shouldRun(run) && nowProvider() < windowEnd && sessionHolder.currentGeometry.get() == geometry &&
+                !encoder.sizeLimitReached()) {
+                if (!storageStatus.isStorageOk()) { run.floor = true; break }
                 encoder.failure()?.let { throw it }
                 sleeper(minOf(250L, windowEnd - nowProvider()).coerceAtLeast(1L))
             }
@@ -195,70 +273,67 @@ class ScreenContinuousSourceEngine(
             wasInterrupted = true
         } catch (t: Throwable) {
             recordingFailure = t
+            run.failed = true
         } finally {
-            // Interrupts must not prevent fsync, draining or remuxing a useful prefix.
-            wasInterrupted = Thread.interrupted() || wasInterrupted
-            // Persist the capture cutoff before drain can block. A late first-frame
-            // callback updates the same record under this lock and preserves it.
-            val cutoff = minOf(windowEnd, nowProvider())
-            val cutoffError = runCatching {
+            val cutoff = minOf(windowEnd, nowProvider(), run.cutoff.get())
+            synchronized(run.interruptLock) {
+                run.captureLoop = false
+                wasInterrupted = Thread.interrupted() || wasInterrupted
+            }
+            if (shouldRun(run) && !run.floor && attempts.size >= MAX_ATTEMPTS) run.failed = true
+            if (wasInterrupted || run.floor || run.failed || !shouldRun(run)) endCapture(run)
+            cutoffError = runCatching {
                 synchronized(recordLock) {
                     info = info.copy(openEndEpochMs = cutoff)
                     check(writeAndForceRecordTxt(record, info))
                 }
             }.exceptionOrNull()
+            if (cutoffError != null) fail(run, cutoffError!!)
             runCatching { display.setSurface(null) }
             val drainStarted = System.nanoTime()
-            val stopError = runCatching { encoder?.stop() }.exceptionOrNull()
-            val drainError = encoder?.failure()
+            stopError = runCatching { encoder?.stop() }.exceptionOrNull()
+            drainError = encoder?.failure()
             runCatching { encoder?.release() }
-            val drainEnded = System.nanoTime()
-            try {
+            drainMs = (System.nanoTime() - drainStarted) / 1_000_000L
+            (stopError ?: drainError)?.let { fail(run, it) }
+        }
+        return {
+            // A failed drain may still own file descriptors. Retain the raw
+            // attempt for restart recovery instead of publishing/deleting it.
+            (stopError ?: drainError)?.let { throw it }
+            synchronized(recordLock) {
+                info = info.copy(firstFrameEpochMs = firstFrame.get())
+                check(writeAndForceRecordTxt(record, info))
+            }
+            if (firstFrame.get() != null && raw.length() > 0L) {
+                val remuxStarted = System.nanoTime()
+                val result = remuxer.remux(dir, raw, index, record, mp4)
+                runCatching { diag("screen event=portion-timing drainMs=$drainMs remuxMs=${(System.nanoTime() - remuxStarted) / 1_000_000L}") }
+                check(result is ScreenRemuxResult.Success && result.sampleDurationMs > 0 && result.outputBytes > 0) {
+                    "screen finalization failed"
+                }
                 synchronized(recordLock) {
-                    info = info.copy(firstFrameEpochMs = firstFrame.get())
+                    info = info.copy(sampleDurationMs = result.sampleDurationMs)
                     check(writeAndForceRecordTxt(record, info))
                 }
-                if (firstFrame.get() != null && raw.length() > 0L) {
-                    val remuxStarted = System.nanoTime()
-                    val result = remuxer.remux(dir, raw, index, record, mp4)
-                    val remuxEnded = System.nanoTime()
-                    diag("screen event=portion-timing drainMs=${(drainEnded - drainStarted) / 1_000_000L} remuxMs=${(remuxEnded - remuxStarted) / 1_000_000L}")
-                    check(result is ScreenRemuxResult.Success && result.sampleDurationMs > 0 && result.outputBytes > 0) {
-                        "screen finalization failed"
-                    }
-                    synchronized(recordLock) {
-                        info = info.copy(sampleDurationMs = result.sampleDurationMs)
-                        check(writeAndForceRecordTxt(record, info))
-                    }
-                    val bounds = info.captureBounds(result.sampleDurationMs)
-                    check(bounds.second > bounds.first)
-                    registered[Key(bounds.first, bounds.second)] = Attempt(id, dir)
-                    val emission = SourceEmission(ScreenConstants.SOURCE_ID, MAIN_STREAM, SourceKind.OBSERVER,
-                        bounds.first, bounds.second,
-                        listOf(PayloadRef(ScreenConstants.PAYLOAD_NAME, ScreenConstants.MEDIA_TYPE, result.outputBytes, null)),
-                        mapOf("zoneId" to info.zoneId, "utcOffsetSeconds" to info.utcOffsetSeconds.toString()), emptyList(), independentTimeline = true)
-                    if (coordinator != null) {
-                        coordinator.releaseAfterFeed(emission)
-                        held = false
-                    } else sink.emit(emission)
-                } else if (raw.length() == 0L && recordingFailure == null && stopError == null && drainError == null) {
-                    dir.deleteRecursively()
-                } else if (raw.length() > 0L) {
-                    error("screen has bytes without a captured frame")
-                }
-                recordingFailure?.let { throw it }
-                cutoffError?.let { throw it }
-                stopError?.let { throw it }
-                drainError?.let { throw it }
-            } finally {
-                if (held) coordinator?.release(MAIN_STREAM, grid)
-                activeId = null
-            }
+                val bounds = info.captureBounds(result.sampleDurationMs)
+                check(bounds.second > bounds.first)
+                check(registered.putIfAbsent(Key(bounds.first, bounds.second), attempt) == null) { "screen identity collision" }
+                sink.emit(SourceEmission(ScreenConstants.SOURCE_ID, MAIN_STREAM, SourceKind.OBSERVER,
+                    bounds.first, bounds.second,
+                    listOf(PayloadRef(ScreenConstants.PAYLOAD_NAME, ScreenConstants.MEDIA_TYPE, result.outputBytes, null)),
+                    mapOf("zoneId" to info.zoneId, "utcOffsetSeconds" to info.utcOffsetSeconds.toString()),
+                    emptyList(), independentTimeline = true))
+            } else if (raw.length() == 0L && recordingFailure == null && stopError == null && drainError == null) {
+                dir.deleteRecursively()
+                attempts.remove(id)
+            } else if (raw.length() > 0L) error("screen has bytes without a captured frame")
+            (recordingFailure ?: cutoffError ?: stopError ?: drainError)?.let { throw it }
         }
-        if (wasInterrupted) throw InterruptedException()
     }
 
     companion object {
+        private const val MAX_ATTEMPTS = 2
         fun windowStart(epochMs: Long): Long = Math.floorDiv(epochMs, ScreenConstants.WINDOW_MS) * ScreenConstants.WINDOW_MS
         fun writeAndForceRecordTxt(file: File, info: ScreenRecordInfo): Boolean {
             val temp = File(file.parentFile, "record.tmp")

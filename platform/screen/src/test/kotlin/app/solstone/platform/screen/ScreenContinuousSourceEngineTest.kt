@@ -8,7 +8,6 @@ import android.util.DisplayMetrics
 import app.solstone.core.model.ReasonCode
 import app.solstone.core.sources.EmissionSink
 import app.solstone.core.sources.MAIN_STREAM
-import app.solstone.core.sources.SealWindowHold
 import app.solstone.core.sources.SourceEmission
 import app.solstone.core.spool.UnresolvedInterruption
 import app.solstone.platform.fgs.ScreenConsentToken
@@ -168,6 +167,7 @@ class ScreenContinuousSourceEngineTest {
     fun sizeBoundarySealsAPortionAndContinuesInTheSameConsentAndGridWindow() {
         val root = Files.createTempDirectory("screen-size-rollover").toFile()
         val secondStarted = java.util.concurrent.CountDownLatch(1)
+        val firstEmitted = java.util.concurrent.CountDownLatch(1)
         val emitted = java.util.concurrent.CopyOnWriteArrayList<SourceEmission>()
         val count = java.util.concurrent.atomic.AtomicInteger()
         val time = java.util.concurrent.atomic.AtomicLong(1_700_000_000_000L)
@@ -185,8 +185,9 @@ class ScreenContinuousSourceEngineTest {
                 secondStarted.countDown(); Thread.sleep(60_000L)
             })
         try {
-            engine.start(EmissionSink { emitted += it })
+            engine.start(EmissionSink { emitted += it; firstEmitted.countDown() })
             assertTrue(secondStarted.await(3, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue(firstEmitted.await(3, java.util.concurrent.TimeUnit.SECONDS))
             assertEquals(1, emitted.size)
             assertTrue(holder.isSessionLive())
             assertFalse(interruption.marked)
@@ -298,7 +299,6 @@ class ScreenContinuousSourceEngineTest {
             var anotherSourceWish = FakeWish.On
 
             val emissions = mutableListOf<SourceEmission>()
-            val holdsReleased = mutableListOf<Long>()
 
             val engine = ScreenContinuousSourceEngine(
                 outputDirectory = tempDir,
@@ -318,18 +318,7 @@ class ScreenContinuousSourceEngineTest {
                 zoneProvider = { ZoneId.of("UTC") },
             )
 
-            engine.bindSealWindowHold(object : SealWindowHold {
-                override fun hold(stream: String, windowStartEpochMs: Long) {}
-                override fun feed(emission: SourceEmission) {}
-                override fun release(stream: String, windowStartEpochMs: Long) {
-                    holdsReleased += windowStartEpochMs
-                }
-                override fun releaseAfterFeed(emission: SourceEmission) {
-                    emissions += emission
-                }
-            })
-
-            engine.start(EmissionSink {})
+            engine.start(EmissionSink { emissions += it })
 
             // Wait for worker to stop after floor trip
             var tries = 0
@@ -352,6 +341,10 @@ class ScreenContinuousSourceEngineTest {
             assertFalse(engine.condition().available)
             // 4. Other source's wish untouched
             assertEquals(FakeWish.On, anotherSourceWish)
+            freeBytes = 2_000L
+            assertEquals(null, engine.reasonWhenOff())
+            assertTrue(engine.condition().available)
+            assertFalse(engine.condition().needsAttention)
         } finally {
             tempDir.deleteRecursively()
         }

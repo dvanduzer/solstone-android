@@ -26,13 +26,40 @@ class SegmentTest {
         segmenter.feed(SourceEmission("audio", MAIN_STREAM, SourceKind.OBSERVER, grid, grid + 20_000L,
             listOf(PayloadRef("audio.m4a", "audio/mp4", 4, null)), emptyMap(), emptyList()))
         val first = grid + 90_000L
-        segmenter.feed(SourceEmission("screen", MAIN_STREAM, SourceKind.OBSERVER, first, grid + 300_000L,
+        val media = segmenter.feed(SourceEmission("screen", MAIN_STREAM, SourceKind.OBSERVER, first, grid + 300_000L,
             listOf(PayloadRef("screen.mp4", "video/mp4", 4, null)),
             mapOf("zoneId" to "America/Denver", "utcOffsetSeconds" to "-25200"), emptyList(), independentTimeline = true))
-        val segments = segmenter.flush().sealed
-        assertEquals(2, segments.size)
-        assertEquals(wireKeys(grid, grid + 20_000L, ZoneId.of("UTC")), segments[0].wireKeys)
-        assertEquals(wireKeys(first, grid + 300_000L, ZoneId.of("America/Denver")), segments[1].wireKeys)
+        assertEquals(wireKeys(first, grid + 300_000L, ZoneId.of("America/Denver")), media.sealed.single().wireKeys)
+        val regular = segmenter.flush().sealed.single()
+        assertEquals(wireKeys(grid, grid + 20_000L, ZoneId.of("UTC")), regular.wireKeys)
+    }
+
+    @Test
+    fun independentMediaBypassesRegularWatermarkWithoutAdvancingOrReleasingIt() {
+        val grid = BASE_EPOCH_MS
+        val segmenter = Segmenter(ZoneId.of("UTC"))
+        segmenter.feed(audioEmission(grid, grid + 10_000L))
+        assertEquals(1, segmenter.sealDue(grid + 305_000L).sealed.size)
+        fun screen(first: Long, end: Long) = SourceEmission("screen", MAIN_STREAM, SourceKind.OBSERVER,
+            first, end, listOf(PayloadRef("screen.mp4", "video/mp4", 4, null)), emptyMap(),
+            emptyList(), independentTimeline = true)
+        val late = segmenter.feed(screen(grid + 5_000L, grid + 8_000L))
+        assertTrue(late.droppedPayloads.isEmpty())
+        assertEquals(wireKeys(grid + 5_000L, grid + 8_000L, ZoneId.of("UTC")), late.sealed.single().wireKeys)
+
+        val next = grid + 300_000L
+        segmenter.holdWindow(MAIN_STREAM, next)
+        segmenter.feed(audioEmission(next, next + 10_000L))
+        assertEquals(1, segmenter.feed(screen(next + 30_000L, next + 40_000L)).sealed.size)
+        assertTrue(segmenter.sealDue(next + 305_000L).sealed.isEmpty())
+        // A later independent clip must not make a regular same-window payload late.
+        segmenter.feed(screen(next + 600_000L, next + 610_000L))
+        assertTrue(segmenter.feed(locationEmission(next + 12_000L, next + 13_000L)).droppedPayloads.isEmpty())
+        segmenter.releaseWindow(MAIN_STREAM, next)
+        val regular = segmenter.sealDue(next + 305_000L).sealed.single()
+        assertEquals(listOf("audio", "location"), regular.payloads.map { it.sourceId })
+        assertEquals(next, regular.wireKeys.startEpochMs)
+        assertEquals(next + 13_000L, regular.wireKeys.endEpochMs)
     }
 
     @Test
