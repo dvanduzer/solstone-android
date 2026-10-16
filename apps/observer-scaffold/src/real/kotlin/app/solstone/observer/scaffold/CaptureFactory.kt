@@ -104,7 +104,8 @@ fun createCaptureSetup(
         }
     } else null
 
-    val screenRemuxer = if (registerScreenSource) AndroidScreenRemuxer() else null
+    val screenDiag: (String) -> Unit = { android.util.Log.i("ScreenSource", it) }
+    val screenRemuxer = if (registerScreenSource) AndroidScreenRemuxer(screenDiag) else null
     val screen = if (registerScreenSource && screenSessionHolder != null && screenRemuxer != null && screenStorageStatus != null) {
         ScreenContinuousSourceEngine(
             outputDirectory = context.filesDir.resolve("screen-source"),
@@ -112,6 +113,7 @@ fun createCaptureSetup(
             remuxer = screenRemuxer,
             interruption = UnresolvedInterruptionStore(context.filesDir.resolve("screen-interruption").toPath()),
             sessionHolder = screenSessionHolder,
+            diag = screenDiag,
             onFloorTripped = { android.os.Handler(android.os.Looper.getMainLooper()).post { if (!screenSessionHolder.isSessionLive()) ObserverForegroundService.screenSessionStopper?.invoke() } },
             onFailed = { android.os.Handler(android.os.Looper.getMainLooper()).post { if (!screenSessionHolder.isSessionLive()) ObserverForegroundService.screenSessionStopper?.invoke() } },
         )

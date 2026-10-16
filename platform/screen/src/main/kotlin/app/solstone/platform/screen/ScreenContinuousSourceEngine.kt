@@ -164,6 +164,7 @@ class ScreenContinuousSourceEngine(
         val mp4 = File(dir, ScreenConstants.PAYLOAD_NAME)
         var info = ScreenRecordInfo(id, start, zone.id, zone.rules.getOffset(Instant.ofEpochMilli(start)).totalSeconds,
             grid, windowEnd, geometry.width, geometry.height)
+        val recordLock = Any()
         check(writeAndForceRecordTxt(record, info)) { "screen metadata unavailable" }
         activeId = id
         val coordinator = hold
@@ -179,7 +180,10 @@ class ScreenContinuousSourceEngine(
             encoder = encoderFactory.create(geometry.width, geometry.height, ScreenConstants.BIT_RATE, ScreenConstants.FRAME_RATE)
             encoder.start(raw, index) { first ->
                 firstFrame.set(first)
-                check(writeAndForceRecordTxt(record, info.copy(firstFrameEpochMs = first)))
+                synchronized(recordLock) {
+                    info = info.copy(firstFrameEpochMs = first)
+                    check(writeAndForceRecordTxt(record, info))
+                }
             }
             display.setSurface(encoder.inputSurface())
             while (running.get() && sessionHolder.isSessionLive() && nowProvider() < windowEnd &&
@@ -194,21 +198,38 @@ class ScreenContinuousSourceEngine(
         } finally {
             // Interrupts must not prevent fsync, draining or remuxing a useful prefix.
             wasInterrupted = Thread.interrupted() || wasInterrupted
+            // Persist the capture cutoff before drain can block. A late first-frame
+            // callback updates the same record under this lock and preserves it.
+            val cutoff = minOf(windowEnd, nowProvider())
+            val cutoffError = runCatching {
+                synchronized(recordLock) {
+                    info = info.copy(openEndEpochMs = cutoff)
+                    check(writeAndForceRecordTxt(record, info))
+                }
+            }.exceptionOrNull()
             runCatching { display.setSurface(null) }
+            val drainStarted = System.nanoTime()
             val stopError = runCatching { encoder?.stop() }.exceptionOrNull()
             val drainError = encoder?.failure()
             runCatching { encoder?.release() }
+            val drainEnded = System.nanoTime()
             try {
-                val end = minOf(windowEnd, nowProvider())
-                info = info.copy(firstFrameEpochMs = firstFrame.get(), openEndEpochMs = end)
-                check(writeAndForceRecordTxt(record, info))
+                synchronized(recordLock) {
+                    info = info.copy(firstFrameEpochMs = firstFrame.get())
+                    check(writeAndForceRecordTxt(record, info))
+                }
                 if (firstFrame.get() != null && raw.length() > 0L) {
+                    val remuxStarted = System.nanoTime()
                     val result = remuxer.remux(dir, raw, index, record, mp4)
+                    val remuxEnded = System.nanoTime()
+                    diag("screen event=portion-timing drainMs=${(drainEnded - drainStarted) / 1_000_000L} remuxMs=${(remuxEnded - remuxStarted) / 1_000_000L}")
                     check(result is ScreenRemuxResult.Success && result.sampleDurationMs > 0 && result.outputBytes > 0) {
                         "screen finalization failed"
                     }
-                    info = info.copy(sampleDurationMs = result.sampleDurationMs)
-                    check(writeAndForceRecordTxt(record, info))
+                    synchronized(recordLock) {
+                        info = info.copy(sampleDurationMs = result.sampleDurationMs)
+                        check(writeAndForceRecordTxt(record, info))
+                    }
                     val bounds = info.captureBounds(result.sampleDurationMs)
                     check(bounds.second > bounds.first)
                     registered[Key(bounds.first, bounds.second)] = Attempt(id, dir)
@@ -226,6 +247,7 @@ class ScreenContinuousSourceEngine(
                     error("screen has bytes without a captured frame")
                 }
                 recordingFailure?.let { throw it }
+                cutoffError?.let { throw it }
                 stopError?.let { throw it }
                 drainError?.let { throw it }
             } finally {

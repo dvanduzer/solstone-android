@@ -97,6 +97,74 @@ class ScreenContinuousSourceEngineTest {
     private enum class FakeWish { Off, On }
 
     @Test
+    fun stoppedCutoffSurvivesBlockedDrainLateFirstFrameAndRecovery() {
+        val root = Files.createTempDirectory("screen-cutoff").toFile()
+        val source = File(root, "live").apply { mkdirs() }
+        val sleeping = java.util.concurrent.CountDownLatch(1)
+        val draining = java.util.concurrent.CountDownLatch(1)
+        val finishDrain = java.util.concurrent.CountDownLatch(1)
+        val emitted = java.util.concurrent.CountDownLatch(1)
+        val time = java.util.concurrent.atomic.AtomicLong(1_700_000_000_100L)
+        lateinit var firstFrame: (Long) -> Unit
+        val holder = ScreenSessionHolder(SimpleProjectionManager(), {
+            DisplayMetrics().apply { widthPixels = 720; heightPixels = 1280; densityDpi = 320 }
+        }, {})
+        assertTrue(holder.startSession(token = ScreenConsentToken(-1, Intent(), 1L)))
+        val encoder = object : ScreenEncoder {
+            override fun inputSurface(): Any = "surface"
+            override fun start(raw: File, index: File, callback: (Long) -> Unit) {
+                raw.writeBytes(ByteArray(100)); index.writeBytes(ByteArray(20)); firstFrame = callback
+            }
+            override fun stop(): Long {
+                draining.countDown()
+                while (true) {
+                    try { finishDrain.await(); break } catch (_: InterruptedException) {}
+                }
+                return 1L
+            }
+            override fun release() {}
+        }
+        val emissions = java.util.concurrent.CopyOnWriteArrayList<SourceEmission>()
+        val engine = ScreenContinuousSourceEngine(source, StorageStatus({ 100_000L }, 1L),
+            FakeRemuxer(), TestInterruption(), holder, encoderFactory = { _, _, _, _ -> encoder },
+            nowProvider = time::get, sleeper = { sleeping.countDown(); Thread.sleep(60_000L) },
+            stopJoinTimeoutMs = 20L)
+        try {
+            engine.start(EmissionSink { emissions += it; emitted.countDown() })
+            assertTrue(sleeping.await(3, java.util.concurrent.TimeUnit.SECONDS))
+            time.set(1_700_000_000_500L)
+            engine.stop()
+            assertTrue(draining.await(3, java.util.concurrent.TimeUnit.SECONDS))
+            val attempt = source.listFiles()!!.single()
+            val record = File(attempt, "record.txt")
+            assertEquals(1_700_000_000_500L, ScreenRecordInfo.parse(record.readText())!!.openEndEpochMs)
+            time.set(1_700_000_012_000L)
+            firstFrame(1_700_000_000_050L)
+            assertEquals(1_700_000_000_500L, ScreenRecordInfo.parse(record.readText())!!.openEndEpochMs)
+
+            // This independent copy is all a process killed during drain would leave.
+            val crashed = File(root, "crashed").apply { mkdirs() }
+            attempt.copyRecursively(File(crashed, attempt.name))
+            val adopted = mutableListOf<app.solstone.core.segment.SealedSegment>()
+            val recovery = ScreenRecoveryManager(crashed, File(root, "spool").toPath(), { _, _ -> emptySet() },
+                app.solstone.platform.audio.AudioSpoolLookup { _, _, _, _, _, _, _, _ ->
+                    app.solstone.platform.audio.AudioCommitStatus.NotFound },
+                { segment, _, _ -> adopted += segment }, TestInterruption(), FakeRemuxer())
+            recovery.recover(); recovery.recover()
+            assertEquals(1, adopted.size)
+            assertEquals(1_700_000_000_050L, adopted.single().wireKeys.startEpochMs)
+            assertEquals(1_700_000_000_500L, adopted.single().wireKeys.endEpochMs)
+
+            finishDrain.countDown()
+            engine.stop()
+            assertTrue(emitted.await(3, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(1_700_000_000_500L, emissions.single().captureEndEpochMs)
+        } finally {
+            finishDrain.countDown(); engine.stop(); holder.stopSession(); root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun sizeBoundarySealsAPortionAndContinuesInTheSameConsentAndGridWindow() {
         val root = Files.createTempDirectory("screen-size-rollover").toFile()
         val secondStarted = java.util.concurrent.CountDownLatch(1)

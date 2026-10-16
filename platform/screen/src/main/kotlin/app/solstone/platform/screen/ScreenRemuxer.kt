@@ -7,6 +7,7 @@ import android.media.MediaCodec
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -52,14 +53,13 @@ object AnnexBParser {
                     val flags = if (fields.size == 3) fields[2].toIntOrNull() ?: break else 0
                     if (size !in 1..AndroidScreenEncoder.MAX_SAMPLE_BYTES || size.toLong() > raw.length() - offset) break
                     val bytes = ByteArray(size)
-                    raw.seek(offset)
                     raw.readFully(bytes)
                     var isFrame = false
                     var key = false
-                    for (nal in extractNals(bytes)) {
-                        when (nal[0].toInt() and 31) {
-                            7 -> sps = byteArrayOf(0, 0, 0, 1) + nal
-                            8 -> pps = byteArrayOf(0, 0, 0, 1) + nal
+                    forEachNal(bytes) { start, end ->
+                        when (bytes[start].toInt() and 31) {
+                            7 -> sps = byteArrayOf(0, 0, 0, 1) + bytes.copyOfRange(start, end)
+                            8 -> pps = byteArrayOf(0, 0, 0, 1) + bytes.copyOfRange(start, end)
                             5 -> { isFrame = true; key = true }
                             1 -> isFrame = true
                         }
@@ -88,8 +88,8 @@ object AnnexBParser {
         return null
     }
 
-    private fun extractNals(bytes: ByteArray): List<ByteArray> {
-        val starts = mutableListOf<Pair<Int, Int>>()
+    private inline fun forEachNal(bytes: ByteArray, consume: (Int, Int) -> Unit) {
+        var start = -1
         var i = 0
         while (i + 2 < bytes.size) {
             val four = i + 3 < bytes.size && bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte() &&
@@ -97,22 +97,22 @@ object AnnexBParser {
             val three = bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte() && bytes[i + 2] == 1.toByte()
             if (four || three) {
                 val prefix = if (four) 4 else 3
-                starts += i to (i + prefix)
+                if (start >= 0 && start < i) consume(start, i)
+                start = i + prefix
                 i += prefix
             } else i++
         }
-        return starts.mapIndexedNotNull { index, (_, start) ->
-            val end = starts.getOrNull(index + 1)?.first ?: bytes.size
-            if (start < end) bytes.copyOfRange(start, end) else null
-        }
+        if (start >= 0 && start < bytes.size) consume(start, bytes.size)
     }
 }
 
-class AndroidScreenRemuxer : ScreenRemuxer {
+class AndroidScreenRemuxer(private val diag: (String) -> Unit = {}) : ScreenRemuxer {
     override fun remux(attemptDir: File, h264File: File, indexFile: File, recordFile: File, mp4File: File): ScreenRemuxResult {
         val temp = File(attemptDir, "remux.tmp.mp4")
         try {
+            val parseStarted = System.nanoTime()
             val validation = AnnexBParser.validateAndTruncate(h264File, indexFile)
+            val parseEnded = System.nanoTime()
             val validated = validation.validSamples
             if (validated.isEmpty() || validation.sps == null || validation.pps == null || !validation.hasIdr) {
                 return ScreenRemuxResult.Failure("no_decodable_frames")
@@ -127,6 +127,7 @@ class AndroidScreenRemuxer : ScreenRemuxer {
                 .coerceIn(1L, 1_000_000L) else 1_000_000L / info.frameRate
             val durationUs = (lastPts + frameUs).coerceAtMost(allowedUs).coerceAtLeast(lastPts + 1L)
             val muxer = MediaMuxer(temp.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            var writeEnded = 0L
             try {
                 val format = MediaFormat.createVideoFormat(ScreenConstants.MIME_TYPE, info.width, info.height)
                 format.setByteBuffer("csd-0", ByteBuffer.wrap(validation.sps))
@@ -134,27 +135,38 @@ class AndroidScreenRemuxer : ScreenRemuxer {
                 val track = muxer.addTrack(format)
                 muxer.start()
                 val bufferInfo = MediaCodec.BufferInfo()
-                RandomAccessFile(h264File, "r").use { raw ->
+                // Reuse one bounded direct buffer. Per-frame heap buffers and
+                // RandomAccessFile reads add avoidable work between encoders.
+                val data = ByteBuffer.allocateDirect(frames.maxOf { it.size })
+                FileInputStream(h264File).channel.use { raw ->
+                    var cursor = 0L
                     for (sample in frames) {
-                        val bytes = ByteArray(sample.size)
-                        raw.seek(sample.offset)
-                        raw.readFully(bytes)
-                        bufferInfo.set(0, bytes.size, sample.ptsUs - firstPts,
+                        if (cursor != sample.offset) raw.position(sample.offset)
+                        data.clear()
+                        data.limit(sample.size)
+                        while (data.hasRemaining()) check(raw.read(data) > 0) { "screen sample truncated" }
+                        cursor = sample.offset + sample.size
+                        data.flip()
+                        bufferInfo.set(0, sample.size, sample.ptsUs - firstPts,
                             if (sample.isKeyFrame) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
-                        muxer.writeSampleData(track, ByteBuffer.wrap(bytes), bufferInfo)
+                        muxer.writeSampleData(track, data, bufferInfo)
                     }
                 }
                 // MediaMuxer uses this explicit EOS timestamp for the final frame duration.
                 bufferInfo.set(0, 0, durationUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                 muxer.writeSampleData(track, ByteBuffer.allocate(0), bufferInfo)
+                writeEnded = System.nanoTime()
                 muxer.stop()
             } finally {
                 muxer.release()
             }
+            val muxEnded = System.nanoTime()
             check(temp.length() <= ScreenConstants.MAX_MP4_BYTES) { "screen container exceeds portion budget" }
             FileOutputStream(temp, true).use { it.fd.sync() }
             Files.move(temp.toPath(), mp4File.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
             FileChannel.open(attemptDir.toPath(), StandardOpenOption.READ).use { it.force(true) }
+            val syncEnded = System.nanoTime()
+            diag("screen event=remux-timing samples=${frames.size} parseMs=${(parseEnded - parseStarted) / 1_000_000L} writeMs=${(writeEnded - parseEnded) / 1_000_000L} closeMs=${(muxEnded - writeEnded) / 1_000_000L} syncMs=${(syncEnded - muxEnded) / 1_000_000L}")
             return ScreenRemuxResult.Success(maxOf(1L, durationUs / 1_000L), mp4File.length())
         } catch (t: Throwable) {
             temp.delete()
