@@ -361,7 +361,7 @@ internal fun PhoneObserverScreen(
                             }
                         },
                     )
-                    if (statusOpen) {
+                    if (statusOpen && !pairingOpen) {
                         PhoneStatusPane(
                             model = model,
                             waiting = waiting,
@@ -370,7 +370,10 @@ internal fun PhoneObserverScreen(
                                 paneStates = paneStates.close(PhonePane.STATUS)
                                 detailStack = detailStack.showInDetail(PhoneRoute.SourceDetail(id))
                             },
-                            onConfirmMark = onConfirmMark,
+                            onConfirmMark = {
+                                paneStates = paneStates.close(PhonePane.STATUS)
+                                onConfirmMark()
+                            },
                             onConnectJournal = {
                                 paneStates = paneStates.close(PhonePane.STATUS)
                                 navigateToJournalSetup()

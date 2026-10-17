@@ -206,6 +206,44 @@ class PhoneObserverScreenTest {
     }
 
     @Test
+    fun confirmingMarkDismissesStatusBeforeOpeningPairing() {
+        var confirmations = 0
+        composeRule.setContent {
+            PhoneObserverScreen(
+                loadState = loaded(audioOn()),
+                status = connected().copy(awaitingMarkConfirmation = true),
+                onToggle = { _, _ -> },
+                onStartObserving = {},
+                onConfirmMark = { confirmations += 1 },
+            )
+        }
+        composeRule.onNodeWithTag("statusPill").performClick()
+        composeRule.onNodeWithTag("statusPane").assertIsDisplayed()
+        composeRule.onNodeWithTag("statusConfirmMark").performClick()
+        composeRule.onNodeWithTag("statusPane").assertDoesNotExist()
+        assertEquals(1, confirmations)
+    }
+
+    @Test
+    fun externalPairingCannotLeaveStatusPopupAbovePairing() {
+        var pairingOpen by mutableStateOf(false)
+        composeRule.setContent {
+            PhoneObserverScreen(
+                loadState = loaded(audioOn()),
+                status = connected().copy(awaitingMarkConfirmation = true),
+                pairingOpen = pairingOpen,
+                onToggle = { _, _ -> },
+                onStartObserving = {},
+                onConfirmMark = {},
+            )
+        }
+        composeRule.onNodeWithTag("statusPill").performClick()
+        composeRule.onNodeWithTag("statusPane").assertIsDisplayed()
+        composeRule.runOnIdle { pairingOpen = true }
+        composeRule.onNodeWithTag("statusPane").assertDoesNotExist()
+    }
+
+    @Test
     fun deckSemanticsHiddenWhilePaneOpen() {
         composeRule.setContent {
             PhoneObserverScreen(
