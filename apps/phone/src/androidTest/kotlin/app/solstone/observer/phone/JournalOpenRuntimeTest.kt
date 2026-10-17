@@ -242,7 +242,7 @@ class JournalOpenRuntimeTest {
     }
 
     @Test
-    fun pushWhileResumed_loadsNewPathInNewInstance() {
+    fun pushWhileResumed_reusesShellAndReloadsEachDelivery() {
         PhoneJournalTestHooks.pairingSnapshotOverride = committedSnapshot()
         PhoneJournalTestHooks.sessionOverride = { FakeJournalSheetSession("http://127.0.0.1:8080/") }
 
@@ -251,8 +251,8 @@ class JournalOpenRuntimeTest {
         }
 
         val scenario = ActivityScenario.launch<PhoneShellActivity>(launchIntent)
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val monitor = instrumentation.addMonitor(PhoneShellActivity::class.java.name, null, false)
+        var originalActivity: PhoneShellActivity? = null
+        scenario.onActivity { originalActivity = it }
 
         try {
             assertEquals(Lifecycle.State.RESUMED, scenario.state)
@@ -274,13 +274,15 @@ class JournalOpenRuntimeTest {
 
             pendingIntent.send()
 
-            val nextActivity = instrumentation.waitForMonitorWithTimeout(monitor, 10_000)
-            assertNotNull("New activity instance must arrive after send", nextActivity)
             composeRule.waitUntil(10_000) {
-                loadedUrls.contains("http://127.0.0.1:8080/app/today")
+                loadedUrls.count { it == "http://127.0.0.1:8080/app/today" } == 1
+            }
+            scenario.onActivity { assertTrue("Warm push must reuse the shell", originalActivity === it) }
+            pendingIntent.send()
+            composeRule.waitUntil(10_000) {
+                loadedUrls.count { it == "http://127.0.0.1:8080/app/today" } == 2
             }
         } finally {
-            instrumentation.removeMonitor(monitor)
             runCatching { scenario.close() }
         }
     }

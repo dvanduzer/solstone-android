@@ -25,6 +25,7 @@ import app.solstone.observer.formfactor.phone.ScreenToggleAction
 import app.solstone.observer.formfactor.phone.screenToggleRoute
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -162,6 +163,9 @@ class PhoneShellActivity : ComponentActivity() {
     }
     private var notificationsEnabled by mutableStateOf(false)
     private var journalNotificationRow by mutableStateOf<PhoneJournalNotificationRow?>(null)
+    private var journalPath by mutableStateOf<String?>(null)
+    private var journalOpen by mutableStateOf(false)
+    private var journalOpenSequence by mutableStateOf(0L)
     private var journalPushOn by mutableStateOf(false)
     private var journalDeliveredBy by mutableStateOf<String?>(null)
     private var pushFactsExecutor: ExecutorService? = null
@@ -251,7 +255,20 @@ class PhoneShellActivity : ComponentActivity() {
         if ((cold || openMarkExtra) && isAwaitingMarkConfirmation()) {
             promptedConfirmationThisProcess = true
             pairingViewModel.dispatch(PhonePairingEvent.OpenMark, container.controller, stores)
+            return
         }
+        if (isAwaitingMarkConfirmation() || pairingViewModel.pairingState.session !is PhonePairingSession.Closed) return
+        val path = journalOpenPath(
+            pushRegistration = BuildConfig.PUSH_REGISTRATION,
+            freshCreate = true,
+            launchedFromHistory = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0,
+            pairingCommitted = displayedSnapshot() is PairingGraphSnapshot.Committed,
+            rawPath = intent.getStringExtra(JournalPushPoster.EXTRA_JOURNAL_OPEN),
+        ) ?: return
+        PhoneDiagLog.appendRaw("kind=journal_open")
+        journalPath = path
+        journalOpenSequence++
+        journalOpen = true
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -274,17 +291,6 @@ class PhoneShellActivity : ComponentActivity() {
 
         if (savedInstanceState == null) {
             handleIntent(intent, cold = true)
-        }
-
-        val openedJournalPath = journalOpenPath(
-            pushRegistration = BuildConfig.PUSH_REGISTRATION,
-            freshCreate = savedInstanceState == null,
-            launchedFromHistory = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0,
-            pairingCommitted = displayedSnapshot() is PairingGraphSnapshot.Committed,
-            rawPath = intent.getStringExtra(JournalPushPoster.EXTRA_JOURNAL_OPEN),
-        )
-        if (openedJournalPath != null) {
-            PhoneDiagLog.appendRaw("kind=journal_open")
         }
 
         if (BuildConfig.PUSH_REGISTRATION) {
@@ -341,8 +347,6 @@ class PhoneShellActivity : ComponentActivity() {
             var markGeneration by remember {
                 mutableStateOf(stores.journalIdentityCoordinator.currentPresentationGeneration())
             }
-            var journalPath by remember { mutableStateOf(openedJournalPath) }
-            var journalOpen by remember { mutableStateOf(openedJournalPath != null) }
             val wishStore = remember { FileSourceWishStore(filesDir.resolve("source-wishes")) }
             var wishStoreState by remember { mutableStateOf(wishStore.read()) }
             val hapticsStore = remember { getSharedPreferences("phone-shell", MODE_PRIVATE) }
@@ -1002,6 +1006,7 @@ class PhoneShellActivity : ComponentActivity() {
                 // lavender header, a purple `close`, a purple `try again`. The journal is the
                 // app's content half and cannot be the one surface in a different palette.
                 PhoneTheme {
+                key(journalOpenSequence) {
                 JournalSheet(
                     presentation = currentMarkPresentation,
                     sessionFactory = {
@@ -1021,6 +1026,7 @@ class PhoneShellActivity : ComponentActivity() {
                     },
                     initialPath = journalPath,
                 )
+                }
                 }
             }
             val migrationNeedsAnswer = migrationRecord?.stage in setOf(

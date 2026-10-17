@@ -4,6 +4,8 @@
 package app.solstone.observer.phone
 
 import android.content.Context
+import androidx.test.platform.app.InstrumentationRegistry
+import android.view.KeyEvent
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -15,6 +17,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.solstone.core.crypto.sha256Hex
+import app.solstone.core.identity.JournalConfirmationPolicy
+import app.solstone.core.identity.awaitingMarkConfirmation
 import app.solstone.core.identity.ClientCredential
 import app.solstone.core.identity.GraphMutationResult
 import app.solstone.core.identity.JournalMarkRecord
@@ -125,6 +129,15 @@ class PhoneHeldRevokeAndMarkTest {
         installTestPairing(server)
 
         ActivityScenario.launch(PhoneShellActivity::class.java).use {
+            composeRule.waitUntil(10_000) {
+                composeRule.onAllNodes(androidx.compose.ui.test.hasTestTag("pairingScanAgain")).fetchSemanticsNodes().isNotEmpty()
+            }
+            InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            composeRule.waitUntil(10_000) {
+                composeRule.onAllNodes(androidx.compose.ui.test.hasTestTag("pairingScanAgain")).fetchSemanticsNodes().isEmpty()
+            }
+            val stores = syncStores(context)
+            assertTrue(awaitingMarkConfirmation(JournalConfirmationPolicy.consults, stores.publisher.currentSnapshot(), stores.journalConfirmationStore))
             composeRule.onNodeWithTag("phoneShelfOpener").performClick()
             composeRule.waitForIdle()
 
@@ -150,6 +163,15 @@ class PhoneHeldRevokeAndMarkTest {
         installTestPairing(server)
 
         ActivityScenario.launch(PhoneShellActivity::class.java).use {
+            composeRule.waitUntil(10_000) {
+                composeRule.onAllNodes(androidx.compose.ui.test.hasTestTag("pairingScanAgain")).fetchSemanticsNodes().isNotEmpty()
+            }
+            InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            composeRule.waitUntil(10_000) {
+                composeRule.onAllNodes(androidx.compose.ui.test.hasTestTag("pairingScanAgain")).fetchSemanticsNodes().isEmpty()
+            }
+            val stores = syncStores(context)
+            assertTrue(awaitingMarkConfirmation(JournalConfirmationPolicy.consults, stores.publisher.currentSnapshot(), stores.journalConfirmationStore))
             composeRule.onNodeWithTag("phoneShelfOpener").performClick()
             composeRule.waitForIdle()
 
