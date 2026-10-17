@@ -5,9 +5,11 @@ package app.solstone.observer.formfactor.phone
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.paneTitle
@@ -85,6 +87,9 @@ internal fun PhoneDetailPane(
     journalVersion: JournalVersionReading? = null,
     isOnHome: (String) -> Boolean = { true },
     onToggle: (String, app.solstone.observer.harness.SourceWish) -> Unit = { _, _ -> },
+    onSetOneUp: () -> Unit = {},
+    onSendLink: () -> Unit = {},
+    onAlreadyHaveOne: () -> Unit = onConnectJournal,
 ) {
     Column(modifier.fillMaxSize()) {
         leadingSlot?.let { slot ->
@@ -140,6 +145,9 @@ internal fun PhoneDetailPane(
             journalVersion = journalVersion,
             isOnHome = isOnHome,
             onToggle = onToggle,
+            onSetOneUp = onSetOneUp,
+            onSendLink = onSendLink,
+            onAlreadyHaveOne = onAlreadyHaveOne,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
@@ -198,6 +206,9 @@ private fun PhoneDetailContent(
     journalVersion: JournalVersionReading? = null,
     isOnHome: (String) -> Boolean = { true },
     onToggle: (String, app.solstone.observer.harness.SourceWish) -> Unit = { _, _ -> },
+    onSetOneUp: () -> Unit = {},
+    onSendLink: () -> Unit = {},
+    onAlreadyHaveOne: () -> Unit = onConnectJournal,
 ) {
     when (top) {
         null -> PhoneDefaultDetailPane(
@@ -230,6 +241,16 @@ private fun PhoneDetailContent(
             mutationFailed = journalMutationFailed && !journalMutationFromThisDevice,
             modifier = modifier,
         )
+        PhoneRoute.JournalSetup -> PhonePaneScaffold(
+            modifier.semantics { paneTitle = spokenPaneTitle(PhoneRoute.JournalSetup) },
+        ) {
+            Spacer(Modifier.height(ShellMetrics.sectionGap))
+            PhoneJournalSetup(
+                onSetOneUp = onSetOneUp,
+                onSendLink = onSendLink,
+                onAlreadyHaveOne = onAlreadyHaveOne,
+            )
+        }
         PhoneRoute.ThisDevice -> PhoneThisDevicePane(
             version = version,
             hapticsEnabled = hapticsEnabled,

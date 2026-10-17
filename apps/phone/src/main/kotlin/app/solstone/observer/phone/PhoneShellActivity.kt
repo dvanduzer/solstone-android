@@ -61,6 +61,7 @@ import app.solstone.observer.harness.MigrationSurface
 import app.solstone.observer.harness.migrationCopy
 import app.solstone.observer.harness.ObserverStartMode
 import app.solstone.observer.harness.SourceWish
+import app.solstone.observer.harness.SourcesReader
 import app.solstone.observer.harness.FileSourceWishStore
 import app.solstone.core.identity.JournalConfirmationPolicy
 import app.solstone.core.identity.awaitingMarkConfirmation
@@ -87,8 +88,12 @@ import kotlinx.coroutines.withContext
 import app.solstone.core.pl.browser.JournalBrowserSession
 import app.solstone.platform.fgs.shouldAskForNotifications
 import app.solstone.platform.fgs.ObserverNotification
-import app.solstone.observer.harness.SourcesReader
-import app.solstone.observer.scaffold.ObserverActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import app.solstone.observer.formfactor.phone.PhonePairingEvent
+import app.solstone.observer.formfactor.phone.PhonePairingSession
+import app.solstone.observer.formfactor.phone.routePhonePairIntent
+import app.solstone.observer.scaffold.CameraAsk
 import app.solstone.observer.scaffold.ObserverAppContainer
 import app.solstone.observer.scaffold.ObserverApplication
 import app.solstone.observer.scaffold.ObserverHarnessRuntime
@@ -144,6 +149,8 @@ class PhoneShellActivity : ComponentActivity() {
     private lateinit var sourcesViewModel: SourcesViewModel
     private lateinit var statusViewModel: PhoneStatusViewModel
     private lateinit var stores: SyncStores
+    private lateinit var pairingViewModel: PhonePairingViewModel
+    private var hasCameraPermission by mutableStateOf(false)
     private var captureOwnerToken: Long = -1L
     private val notificationPrompt by lazy { NotificationPromptStore(this) }
     private val capturePermissionRequests by lazy { CapturePermissionRequestStore(this) }
@@ -221,6 +228,37 @@ class PhoneShellActivity : ComponentActivity() {
     private fun displayedSnapshot(): PairingGraphSnapshot =
         PhoneJournalTestHooks.pairingSnapshotOverride ?: stores.publisher.currentSnapshot()
 
+    private fun hasCamera(): Boolean =
+        checkSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+    private fun isAwaitingMarkConfirmation(): Boolean =
+        awaitingMarkConfirmation(
+            JournalConfirmationPolicy.consults,
+            displayedSnapshot(),
+            stores.journalConfirmationStore,
+        )
+
+    private fun handleIntent(intent: Intent?, cold: Boolean) {
+        if (intent == null) return
+        val rawData = intent.data?.toString()
+        if (rawData != null) {
+            val step = routePhonePairIntent(pairingViewModel.pairingState, rawData)
+            pairingViewModel.applyStep(step, container.controller, stores)
+            return
+        }
+        val openMarkExtra = intent.getBooleanExtra(EXTRA_OPEN_MARK, false)
+        if ((cold || openMarkExtra) && isAwaitingMarkConfirmation()) {
+            promptedConfirmationThisProcess = true
+            pairingViewModel.dispatch(PhonePairingEvent.OpenMark, container.controller, stores)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent, cold = false)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -230,13 +268,11 @@ class PhoneShellActivity : ComponentActivity() {
         }
         container = runtime.container()
         stores = syncStores(applicationContext)
+        pairingViewModel = ViewModelProvider(this)[PhonePairingViewModel::class.java]
+        hasCameraPermission = hasCamera()
 
-        if (!promptedConfirmationThisProcess && savedInstanceState == null && awaitingMarkConfirmation(JournalConfirmationPolicy.consults, displayedSnapshot(), stores.journalConfirmationStore)) {
-            promptedConfirmationThisProcess = true
-            startActivity(
-                Intent(this, ObserverActivity::class.java)
-                    .putExtra(ObserverActivity.EXTRA_CONFIRM_JOURNAL, true),
-            )
+        if (savedInstanceState == null) {
+            handleIntent(intent, cold = true)
         }
 
         val openedJournalPath = journalOpenPath(
@@ -743,6 +779,7 @@ class PhoneShellActivity : ComponentActivity() {
             val aboutBlock = rememberPhoneAboutBlock(
                 aboutFacts, snapshot?.status?.journalVersion, aboutSnapshotEpoch,
             )
+            Box(Modifier.fillMaxSize()) {
             PhoneObserverScreen(
                 loadState = sourcesViewModel.sourcesState,
                 status = snapshot?.status,
@@ -768,7 +805,7 @@ class PhoneShellActivity : ComponentActivity() {
                             container.sources.setWish("screen", SourceWish.Off)
                             sourcesViewModel.refresh()
                             ObserverForegroundService.screenSessionStopper?.invoke()
-                            ObserverForegroundService.refreshRunningCaptureTypes(this)
+                            ObserverForegroundService.refreshRunningCaptureTypes(this@PhoneShellActivity)
                             (application as? PhoneApplication)?.applyEffectiveCapture(ownerTurnedSourceOff = true)
                             wishStoreState = wishStore.read()
                         }
@@ -781,34 +818,30 @@ class PhoneShellActivity : ComponentActivity() {
                     container.controller.ensureObserving()
                 },
                 onGrantPermissions = { sourceId -> routePermissionRequest(sourceId, priorWishFor(sourceId)) },
-                onConnectJournal = {
-                    openPairingScanner()
+                onSetOneUp = {
+                    openUrl("https://solstone.app/install")
+                },
+                onSendLink = {
+                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, "https://solstone.app/install")
+                    }
+                    startActivity(Intent.createChooser(sendIntent, null))
+                },
+                onAlreadyHaveOne = {
+                    pairingViewModel.dispatch(PhonePairingEvent.OpenScan, container.controller, stores)
                 },
                 onConfirmMark = {
-                    val route = manualMarkConfirmationRoute(
-                        awaitingMarkConfirmation = awaitingMarkConfirmation(
-                            JournalConfirmationPolicy.consults,
-                            displayedSnapshot(),
-                            stores.journalConfirmationStore,
-                        ),
-                        promptedConfirmationThisProcess = promptedConfirmationThisProcess,
-                    )
-                    if (route == MarkConfirmationRoute.CONFIRM) {
-                        startActivity(
-                            Intent(this@PhoneShellActivity, ObserverActivity::class.java)
-                                .putExtra(ObserverActivity.EXTRA_CONFIRM_JOURNAL, true),
-                        )
+                    if (isAwaitingMarkConfirmation()) {
+                        pairingViewModel.dispatch(PhonePairingEvent.OpenMark, container.controller, stores)
                     }
                 },
                 onOpenJournal = {
                     if (pairingSnapshot is PairingGraphSnapshot.Committed && journalConfirmed) {
                         journalPath = null
                         journalOpen = true
-                    } else {
-                        startActivity(
-                            Intent(this@PhoneShellActivity, ObserverActivity::class.java)
-                                .putExtra(ObserverActivity.EXTRA_CONFIRM_JOURNAL, true),
-                        )
+                    } else if (isAwaitingMarkConfirmation()) {
+                        pairingViewModel.dispatch(PhonePairingEvent.OpenMark, container.controller, stores)
                     }
                 },
                 journalPaired = pairingSnapshot is PairingGraphSnapshot.Committed,
@@ -877,8 +910,8 @@ class PhoneShellActivity : ComponentActivity() {
                     )
                 },
                 onSendTestNotification = {
-                    notificationTestFailed = !ObserverNotification.postTest(this)
-                    notificationsEnabled = ObserverNotification.notificationsEnabled(this)
+                    notificationTestFailed = !ObserverNotification.postTest(this@PhoneShellActivity)
+                    notificationsEnabled = ObserverNotification.notificationsEnabled(this@PhoneShellActivity)
                 },
                 onReportProblem = {
                     val facts = aboutFacts
@@ -932,6 +965,27 @@ class PhoneShellActivity : ComponentActivity() {
                 captureWidthDp = capture.windowWidthDp,
                 technicalDetailsRequest = technicalDetailsRequest,
             )
+            if (pairingViewModel.pairingState.session !is PhonePairingSession.Closed) {
+                PhonePairingOverlay(
+                    state = pairingViewModel.pairingState,
+                    cameraAsk = pairingViewModel.cameraAsk,
+                    hasCamera = hasCameraPermission,
+                    onAskForCamera = {
+                        pairingViewModel.cameraAsk = CameraAsk.Awaiting
+                        container.onScannerNeedsCamera()
+                        requestPermissions(arrayOf(android.Manifest.permission.CAMERA), CAMERA_FOR_SCAN_REQUEST)
+                    },
+                    onScannerNeedsCamera = {
+                        container.onScannerNeedsCamera()
+                    },
+                    dispatch = { event ->
+                        pairingViewModel.dispatch(event, container.controller, stores)
+                    },
+                    controller = container.controller,
+                    stores = stores,
+                )
+            }
+            }
             if (journalSheetOpenState) {
                 // 🔴 The theme is applied INSIDE `PhoneShell`, and this sheet is a sibling of it
                 // rather than a child — so it had been drawing on Material's stock scheme: a
@@ -953,7 +1007,7 @@ class PhoneShellActivity : ComponentActivity() {
                     onClose = { journalOpen = false },
                     onPairingRepair = {
                         journalOpen = false
-                        openPairingScanner()
+                        pairingViewModel.dispatch(PhonePairingEvent.OpenScan, container.controller, stores)
                     },
                     initialPath = journalPath,
                 )
@@ -1059,7 +1113,7 @@ class PhoneShellActivity : ComponentActivity() {
                             !migrationBusy && migrationSurface == MigrationSurface.KEY_REFUSED ->
                                 TextButton(onClick = {
                                     migrationDialogOpen = false
-                                    openPairingScanner()
+                                    pairingViewModel.dispatch(PhonePairingEvent.OpenScan, container.controller, stores)
                                 }) { Text("pair again") }
                             !migrationBusy && !migrationStoreUnavailable && migrationSurface == MigrationSurface.TARGET_UNAVAILABLE ->
                                 TextButton(onClick = {
@@ -1109,12 +1163,6 @@ class PhoneShellActivity : ComponentActivity() {
             else -> "none"
         }
 
-    private fun openPairingScanner() {
-        startActivity(
-            Intent(this, ObserverActivity::class.java)
-                .putExtra(ObserverActivity.EXTRA_SCAN_PAIR_QR, true),
-        )
-    }
 
     /**
      * Where a design capture asked the shell to open, or home.
@@ -1300,6 +1348,7 @@ class PhoneShellActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        hasCameraPermission = hasCamera()
         migrationRefreshEpoch += 1
         // ⚠ A capture permission the owner allowed in system Settings is an affirmative grant, and
         // no in-app callback fires for it. Returning here is the event, so this is where it is
@@ -1508,6 +1557,12 @@ class PhoneShellActivity : ComponentActivity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == CAMERA_FOR_SCAN_REQUEST) {
+            pairingViewModel.cameraAsk = CameraAsk.Answered
+            container.controller.onPermissionsRequested()
+            hasCameraPermission = hasCamera()
+            return
+        }
         if (requestCode == PERMISSION_REQUEST) {
             // ⛔ Cleared first: the refresh below recomputes every row, and clearing after it would
             // leave one recomposition still reading `setting up` over a settled answer.
@@ -1592,6 +1647,8 @@ class PhoneShellActivity : ComponentActivity() {
     }
 
     companion object {
+        const val EXTRA_OPEN_MARK = "app.solstone.observer.phone.EXTRA_OPEN_MARK"
+        private const val CAMERA_FOR_SCAN_REQUEST = 12
         internal var promptedConfirmationThisProcess = false
         const val PERMISSION_REQUEST = 10
         // The embedded distributor delivers through Google Play services.

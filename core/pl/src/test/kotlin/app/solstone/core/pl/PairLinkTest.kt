@@ -12,6 +12,62 @@ import kotlin.test.assertTrue
 
 class PairLinkTest {
     @Test
+    fun acceptPairLinkAcceptsHttpsAndCustomSchemesForDirectAndRelay() {
+        val blobs = listOf(
+            blob(byteArrayOf(10, 1, 2, 3), 7657),
+            v05Blob(listOf(byteArrayOf(10, 1, 2, 3))),
+            relayWindowBlob(),
+        )
+        for (b in blobs) {
+            val frag = crockfordEncode(b)
+            val canonical = "https://go.solstone.app/p#$frag"
+            val expected = parsePairLink(canonical)
+
+            val variants = listOf(
+                canonical,
+                "  $canonical  ",
+                "solstone://pair#$frag",
+                "solstone://pair/#$frag",
+                "SOLSTONE://PAIR#$frag",
+                "SOLSTONE://PAIR/#$frag",
+                "  solstone://pair#$frag  ",
+                "  solstone://pair/#$frag  ",
+            )
+            for (v in variants) {
+                val acceptance = acceptPairLink(v)
+                assertTrue(acceptance is PairLinkAcceptance.Accepted, "Failed on variant: $v")
+                assertEquals(canonical, acceptance.canonicalHttps)
+                assertEquals(expected, acceptance.parsed)
+            }
+        }
+    }
+
+    @Test
+    fun acceptPairLinkRejectsInvalidShapes() {
+        val validFrag = crockfordEncode(blob(byteArrayOf(10, 1, 2, 3), 7657))
+        val invalidInputs = listOf(
+            "#$validFrag",
+            "  #$validFrag  ",
+            "https://go.solstone.app/p?$validFrag#$validFrag",
+            "https://go.solstone.app/p?secret=$validFrag",
+            "https://evil.example.com/p#$validFrag",
+            "https://go.solstone.app/other#$validFrag",
+            "https://go.solstone.app/p#invalid!crockford",
+            "https://go.solstone.app/p#",
+            "solstone://pair?$validFrag#$validFrag",
+            "solstone://pair?payload",
+            "solstone://other#$validFrag",
+            "solstone://pair/not-root#$validFrag",
+            "solstone://pair#",
+            "solstone://pair",
+            "not even a uri : // ??",
+        )
+        for (input in invalidInputs) {
+            assertEquals(PairLinkAcceptance.Rejected, acceptPairLink(input), "Expected Rejected for $input")
+        }
+    }
+
+    @Test
     fun parsesKnownPlaintextVector() {
         val nonce = ByteArray(16) { (0x10 + it).toByte() }
         val ca = ByteArray(16) { (0xa0 + it).toByte() }

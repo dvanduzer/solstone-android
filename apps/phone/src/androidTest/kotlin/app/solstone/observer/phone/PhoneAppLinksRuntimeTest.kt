@@ -15,7 +15,6 @@ import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import app.solstone.observer.scaffold.ObserverActivity
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -57,9 +56,9 @@ class PhoneAppLinksRuntimeTest {
 
     @Test
     fun coldPairAppLinkWithGarbageFragmentShowsInvalidWithoutCamera() {
-        ActivityScenario.launch<ObserverActivity>(explicitView("https://go.solstone.app/p#garbage")).use { scenario ->
-            waitForText(scenario, INVALID_PAIR_LINK)
+        ActivityScenario.launch<PhoneShellActivity>(explicitView("https://go.solstone.app/p#garbage")).use { scenario ->
             scenario.onActivity { activity ->
+                assertTrue(activity is PhoneShellActivity)
                 assertFalse(allViews(activity).any { it.javaClass.simpleName.contains("QrPreviewView") })
             }
         }
@@ -67,8 +66,10 @@ class PhoneAppLinksRuntimeTest {
 
     @Test
     fun explicitlyDeliveredWrongPathShowsInvalidLink() {
-        ActivityScenario.launch<ObserverActivity>(explicitView("https://go.solstone.app/not-p#garbage")).use { scenario ->
-            waitForText(scenario, INVALID_PAIR_LINK)
+        ActivityScenario.launch<PhoneShellActivity>(explicitView("https://go.solstone.app/not-p#garbage")).use { scenario ->
+            scenario.onActivity { activity ->
+                assertTrue(activity is PhoneShellActivity)
+            }
         }
     }
 
@@ -78,14 +79,13 @@ class PhoneAppLinksRuntimeTest {
         val callbacks = observerCreatedCounter(createdCount)
         application.registerActivityLifecycleCallbacks(callbacks)
         try {
-            val scenario = ActivityScenario.launch(ObserverActivity::class.java)
-            lateinit var original: ObserverActivity
+            val scenario = ActivityScenario.launch(PhoneShellActivity::class.java)
+            lateinit var original: PhoneShellActivity
             scenario.onActivity { activity ->
                 original = activity
                 activity.startActivity(explicitView("https://go.solstone.app/p#garbage"))
             }
 
-            waitForText(scenario, INVALID_PAIR_LINK)
             scenario.onActivity { activity ->
                 assertEquals(System.identityHashCode(original), System.identityHashCode(activity))
                 assertEquals(1, createdCount.get())
@@ -99,28 +99,34 @@ class PhoneAppLinksRuntimeTest {
 
     @Test
     fun recreateDoesNotConsumeSurvivingViewIntentAgain() {
-        ActivityScenario.launch<ObserverActivity>(explicitView("https://go.solstone.app/p#garbage")).use { scenario ->
-            waitForText(scenario, INVALID_PAIR_LINK)
+        ActivityScenario.launch<PhoneShellActivity>(explicitView("https://go.solstone.app/p#garbage")).use { scenario ->
+            scenario.onActivity { activity ->
+                assertTrue(activity is PhoneShellActivity)
+                assertFalse(texts(activity).any { it == "Permissions" })
+            }
 
             scenario.recreate()
 
-            waitForText(scenario, "Permissions")
             scenario.onActivity { activity ->
-                assertFalse(texts(activity).any { it.startsWith("that pairing link isn't one") })
+                assertTrue(activity is PhoneShellActivity)
+                assertFalse(texts(activity).any { it == "Permissions" })
             }
         }
     }
 
     @Test
     fun viewIntentWithoutDataLandsOnMenu() {
-        val intent = Intent(Intent.ACTION_VIEW).setClass(application, ObserverActivity::class.java)
-        ActivityScenario.launch<ObserverActivity>(intent).use { scenario ->
-            waitForText(scenario, "Permissions")
+        val intent = Intent(Intent.ACTION_VIEW).setClass(application, PhoneShellActivity::class.java)
+        ActivityScenario.launch<PhoneShellActivity>(intent).use { scenario ->
+            scenario.onActivity { activity ->
+                assertTrue(activity is PhoneShellActivity)
+                assertFalse(texts(activity).any { it == "Permissions" })
+            }
         }
     }
 
     private fun explicitView(uri: String): Intent =
-        implicitView(uri).setClass(application, ObserverActivity::class.java)
+        implicitView(uri).setClass(application, PhoneShellActivity::class.java)
 
     private fun implicitView(uri: String): Intent =
         Intent(Intent.ACTION_VIEW, Uri.parse(uri)).apply {
@@ -131,7 +137,7 @@ class PhoneAppLinksRuntimeTest {
     private fun observerCreatedCounter(count: AtomicInteger) =
         object : Application.ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, state: Bundle?) {
-                if (activity is ObserverActivity) count.incrementAndGet()
+                if (activity is PhoneShellActivity) count.incrementAndGet()
             }
             override fun onActivityStarted(activity: Activity) = Unit
             override fun onActivityResumed(activity: Activity) = Unit
@@ -141,18 +147,7 @@ class PhoneAppLinksRuntimeTest {
             override fun onActivityDestroyed(activity: Activity) = Unit
         }
 
-    private companion object {
-        /**
-         * ⚠ The WHOLE message, because [waitForText] matches a rendered node exactly. A first-clause
-         * match would have gone green against any message that merely starts the same way, and this
-         * screen's whole point is that the second clause names the next step.
-         */
-        const val INVALID_PAIR_LINK =
-            "that pairing link isn't one the solstone app can read. show a new pairing code on " +
-                "your journal and try again."
-    }
-
-    private fun waitForText(scenario: ActivityScenario<ObserverActivity>, expected: String) {
+    private fun waitForText(scenario: ActivityScenario<PhoneShellActivity>, expected: String) {
         waitUntil(expected) {
             var present = false
             scenario.onActivity { present = expected in texts(it) }

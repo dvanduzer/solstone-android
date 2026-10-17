@@ -310,7 +310,7 @@ internal fun PaneUnavailableRow(
     }
 }
 
-internal const val SUPPORT_SITE_URL = "https://support.solstone.app"
+const val SUPPORT_SITE_URL = "https://support.solstone.app"
 internal const val SUPPORT_EMAIL = "support@solstone.app"
 internal const val PRIVACY_URL = "https://solpbc.org/privacy"
 internal const val SOURCE_URL = "https://github.com/solpbc/solstone-android"

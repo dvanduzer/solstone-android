@@ -160,7 +160,7 @@ class ObserverHarnessUi(
                 if (message == "paired") showPaired()
             }
             val preview = when (qrBackend) {
-                QrBackend.Camera2 -> Camera2QrPreviewView(context, controller, qrThreadLabel, onStatus)
+                QrBackend.Camera2 -> Camera2QrPreviewView(context, controller, qrThreadLabel, status = onStatus)
                 QrBackend.Legacy -> LegacyQrPreviewView(context, controller, qrThreadLabel, status = onStatus)
             }
             addView(

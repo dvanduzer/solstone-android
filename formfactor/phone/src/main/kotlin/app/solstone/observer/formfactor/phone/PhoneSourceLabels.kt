@@ -39,6 +39,7 @@ fun headingText(surface: PhoneSurface): String? = when (surface) {
         "heading.import" -> "import"
         "heading.add_more" -> "add more"
         "heading.your_journal" -> "your journal"
+        "heading.journal_setup" -> "your journal"
         "heading.this_device" -> "this device"
         "heading.technical_details" -> "technical details"
         "heading.event_log" -> "event log"

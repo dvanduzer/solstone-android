@@ -183,8 +183,8 @@ class HarnessControllerTest {
         )
         assertTrue(f.controller.start())
         val diagnostics = f.controller.diagnostics()
-        assertEquals(SourceState.NEEDS_ATTENTION, diagnostics.state)
-        assertEquals(ReasonCode.UNPAIRED, diagnostics.reason)
+        assertEquals(SourceState.ON, diagnostics.state)
+        assertEquals(ReasonCode.NONE, diagnostics.reason)
     }
 
     @Test

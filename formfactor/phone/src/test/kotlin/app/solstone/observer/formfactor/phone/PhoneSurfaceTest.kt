@@ -25,8 +25,8 @@ class PhoneSurfaceTest {
     }
 
     @Test
-    fun surfaceCountIsTwenty() {
-        assertEquals(20, phoneSurfaces().size)
+    fun surfaceCountIsTwentyOne() {
+        assertEquals(21, phoneSurfaces().size)
     }
 
     @Test
@@ -46,6 +46,7 @@ class PhoneSurfaceTest {
         assertTrue(registered(PhoneRoute.Import))
         assertTrue(registered(PhoneRoute.AddMore))
         assertTrue(registered(PhoneRoute.YourJournal))
+        assertTrue(registered(PhoneRoute.JournalSetup))
         assertTrue(registered(PhoneRoute.ThisDevice))
         assertTrue(registered(PhoneRoute.TechnicalDetails))
         assertTrue(registered(PhoneRoute.EventLog))
@@ -78,6 +79,7 @@ class PhoneSurfaceTest {
         PhoneRoute.Import -> PhoneRoute.Import in phoneSurfaces()
         PhoneRoute.AddMore -> PhoneRoute.AddMore in phoneSurfaces()
         PhoneRoute.YourJournal -> PhoneRoute.YourJournal in phoneSurfaces()
+        PhoneRoute.JournalSetup -> PhoneRoute.JournalSetup in phoneSurfaces()
         PhoneRoute.ThisDevice -> PhoneRoute.ThisDevice in phoneSurfaces()
         PhoneRoute.TechnicalDetails -> PhoneRoute.TechnicalDetails in phoneSurfaces()
         PhoneRoute.EventLog -> PhoneRoute.EventLog in phoneSurfaces()
@@ -104,7 +106,10 @@ class PhoneSurfaceTest {
 
     @Test
     fun announcedPaneNamesAreUnique() {
-        val announced = phoneSurfaces().filterNot { it == PhoneDeck }.map { spokenPaneTitle(it) } + greetingFor(5)
+        assertEquals(spokenPaneTitle(PhoneRoute.YourJournal), spokenPaneTitle(PhoneRoute.JournalSetup))
+        val announced = phoneSurfaces()
+            .filterNot { it == PhoneDeck || it == PhoneRoute.JournalSetup }
+            .map { spokenPaneTitle(it) } + greetingFor(5)
         assertTrue(announced.all { it.isNotBlank() })
         assertEquals(announced.size, announced.distinct().size)
     }

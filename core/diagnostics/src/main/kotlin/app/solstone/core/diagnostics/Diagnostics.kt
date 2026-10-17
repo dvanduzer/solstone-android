@@ -80,7 +80,6 @@ fun reduce(f: SourceFacts): Pair<SourceState, ReasonCode> =
             SourceState.NEEDS_ATTENTION to ReasonCode.SERVICE_KILLED
         !f.identityPersistenceOk -> SourceState.NEEDS_ATTENTION to ReasonCode.PERSISTENCE_FAILED
         !f.storageOk -> SourceState.NEEDS_ATTENTION to ReasonCode.STORAGE_FULL
-        f.desiredOn && f.pairing != PairingFact.PAIRED -> SourceState.NEEDS_ATTENTION to ReasonCode.UNPAIRED
         f.desiredOn && f.engineStartIssued && !f.providerEmitting ->
             SourceState.NEEDS_ATTENTION to ReasonCode.PROVIDER_SILENT
         f.desiredOn && f.conditionNeedsAttention -> SourceState.NEEDS_ATTENTION to ReasonCode.PROVIDER_SILENT

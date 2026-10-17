@@ -80,7 +80,6 @@ fun PhoneYourJournalPane(
                 PaneRowDivider()
                 PaneNavRow(
                     label = "connect a journal",
-                    subLine = "scan the pairing code your journal shows",
                     onClick = onConnectJournal,
                     modifier = Modifier.testTag("yourJournalConnect"),
                 )

@@ -184,7 +184,7 @@ class GlassesObserverRuntimeCommandTest {
     }
 
     @Test
-    fun observeStartUnpairedReportsDiagnosticsNeedsAttention() {
+    fun observeStartUnpairedSucceeds() {
         val runtime = GlassesObserverRuntime(
             FakeRuntimeContainer(
                 controller = controller(
@@ -195,9 +195,7 @@ class GlassesObserverRuntimeCommandTest {
             ),
         )
 
-        val result = assertIs<CommandNeedsAttention>(runtime.observeStart())
-        assertEquals(SourceState.NEEDS_ATTENTION, result.state)
-        assertEquals(ReasonCode.UNPAIRED, result.reason)
+        assertEquals(CommandSucceeded, runtime.observeStart())
     }
 
     @Test

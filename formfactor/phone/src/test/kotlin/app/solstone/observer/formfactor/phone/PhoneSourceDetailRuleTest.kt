@@ -190,7 +190,6 @@ class PhoneSourceDetailRuleTest {
         )
 
         listOf(
-            ReasonCode.UNPAIRED,
             ReasonCode.AUTH_REVOKED,
             ReasonCode.SERVICE_KILLED,
             ReasonCode.PERSISTENCE_FAILED,
@@ -200,6 +199,17 @@ class PhoneSourceDetailRuleTest {
                 resolveSourceDetailReason(source("audio", ReasonCode.NONE), observer(deviceReason)),
             )
         }
+
+        val onSource = SourceStatus("audio", SourceWish.On, SourceState.ON, ReasonCode.NONE)
+        val unpairedObserver = ObserverStatus(SourceState.ON, ReasonCode.NONE)
+        assertEquals(
+            ReasonCode.NONE,
+            resolveSourceDetailReason(onSource, unpairedObserver),
+        )
+        assertEquals(
+            ReasonCode.NONE,
+            resolveSourceDetailReason(source("audio", ReasonCode.NONE), observer(ReasonCode.UNPAIRED)),
+        )
 
         assertEquals(
             ReasonCode.NONE,

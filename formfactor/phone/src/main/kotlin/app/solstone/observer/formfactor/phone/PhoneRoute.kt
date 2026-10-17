@@ -56,6 +56,11 @@ sealed interface PhoneRoute : PhoneSurface {
         override val headingKey: String get() = "heading.your_journal"
     }
 
+    data object JournalSetup : PhoneRoute {
+        override val paneTitle: String get() = "surface_journal_setup"
+        override val headingKey: String get() = "heading.journal_setup"
+    }
+
     data object ThisDevice : PhoneRoute {
         override val paneTitle: String get() = "surface_this_device"
         override val headingKey: String get() = "heading.this_device"
@@ -98,6 +103,7 @@ fun encodePhoneRoute(route: PhoneRoute): String = when (route) {
     PhoneRoute.Import -> "import"
     PhoneRoute.AddMore -> "add-more"
     PhoneRoute.YourJournal -> "your-journal"
+    PhoneRoute.JournalSetup -> "journal-setup"
     PhoneRoute.ThisDevice -> "this-device"
     PhoneRoute.TechnicalDetails -> "technical-details"
     PhoneRoute.EventLog -> "event-log"
@@ -121,6 +127,7 @@ fun decodePhoneRoute(key: String): PhoneRoute? {
         "import" -> PhoneRoute.Import
         "add-more" -> PhoneRoute.AddMore
         "your-journal" -> PhoneRoute.YourJournal
+        "journal-setup" -> PhoneRoute.JournalSetup
         "this-device" -> PhoneRoute.ThisDevice
         "technical-details" -> PhoneRoute.TechnicalDetails
         "event-log" -> PhoneRoute.EventLog

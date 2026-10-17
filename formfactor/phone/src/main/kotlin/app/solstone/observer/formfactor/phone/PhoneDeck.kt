@@ -54,6 +54,9 @@ fun PhoneDeck(
     onOpenAddMore: () -> Unit,
     showWelcome: Boolean = false,
     onConnectJournal: () -> Unit = {},
+    onSetOneUp: () -> Unit = {},
+    onSendLink: () -> Unit = {},
+    onAlreadyHaveOne: () -> Unit = onConnectJournal,
     hour: Int,
     modifier: Modifier = Modifier,
     isOnHome: (String) -> Boolean = { true },
@@ -121,6 +124,9 @@ fun PhoneDeck(
                 onOpenAddMore = onOpenAddMore,
                 showWelcome = showWelcome,
                 onConnectJournal = onConnectJournal,
+                onSetOneUp = onSetOneUp,
+                onSendLink = onSendLink,
+                onAlreadyHaveOne = onAlreadyHaveOne,
             )
             when (loadState) {
                 is LoadState.Failed -> {
@@ -156,6 +162,9 @@ internal fun PhoneSourceGrid(
     paired: Boolean = false,
     showWelcome: Boolean = false,
     onConnectJournal: () -> Unit = {},
+    onSetOneUp: () -> Unit = {},
+    onSendLink: () -> Unit = {},
+    onAlreadyHaveOne: () -> Unit = onConnectJournal,
 ) {
     LazyVerticalGrid(
         // ⚠ Fixed, never `GridCells.Adaptive`. An adaptive grid lets each row pick its
@@ -174,7 +183,11 @@ internal fun PhoneSourceGrid(
     ) {
         if (showWelcome) {
             item(key = "welcome", span = { GridItemSpan(maxLineSpan) }) {
-                PhoneWelcomeCard(onConnectJournal)
+                PhoneWelcomeCard(
+                    onSetOneUp = onSetOneUp,
+                    onSendLink = onSendLink,
+                    onAlreadyHaveOne = onAlreadyHaveOne,
+                )
             }
         }
         // 🔴 Sources first, destinations after. § 2.1 reads "one tile per source the owner has,
@@ -235,7 +248,11 @@ internal fun PhoneSourceGrid(
 }
 
 @Composable
-private fun PhoneWelcomeCard(onConnectJournal: () -> Unit) {
+private fun PhoneWelcomeCard(
+    onSetOneUp: () -> Unit,
+    onSendLink: () -> Unit,
+    onAlreadyHaveOne: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -259,12 +276,11 @@ private fun PhoneWelcomeCard(onConnectJournal: () -> Unit) {
             "your journal is always private, only yours.",
             style = MaterialTheme.typography.bodyMedium,
         )
-        Button(
-            onClick = onConnectJournal,
-            modifier = Modifier.fillMaxWidth().testTag("welcomeConnectJournal"),
-        ) {
-            Text("connect a journal")
-        }
+        PhoneJournalSetup(
+            onSetOneUp = onSetOneUp,
+            onSendLink = onSendLink,
+            onAlreadyHaveOne = onAlreadyHaveOne,
+        )
     }
 }
 

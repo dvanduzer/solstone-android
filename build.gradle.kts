@@ -2480,7 +2480,7 @@ fun Project.registerReleaseAppLinksManifestCheck() {
             if (!manifest.exists()) {
                 throw GradleException("Merged manifest not found: ${manifest.relativeTo(rootProject.projectDir)}")
             }
-            val owner = "app.solstone.observer.scaffold.ObserverActivity"
+            val owner = "app.solstone.observer.phone.PhoneShellActivity"
             val ownerGroup = activityIntentFilterGroups(manifest.readText())
                 .firstOrNull { it.activityName == owner }
             val failures = mutableListOf<String>()

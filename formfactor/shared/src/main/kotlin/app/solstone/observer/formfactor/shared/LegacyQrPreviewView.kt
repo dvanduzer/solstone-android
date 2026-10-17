@@ -33,6 +33,7 @@ class LegacyQrPreviewView(
     private val controller: HarnessController,
     threadLabel: String,
     private val onPairingCommitted: () -> Unit = {},
+    private val onDecoded: ((String) -> Unit)? = null,
     private val status: (String) -> Unit,
 ) : SurfaceView(context), SurfaceHolder.Callback, Camera.PreviewCallback {
     private val reader = MultiFormatReader()
@@ -124,7 +125,12 @@ class LegacyQrPreviewView(
     }
 
     private fun handleDecodedText(text: String) {
-        if (looksLikePairLink(text) && !closed) {
+        if (closed) return
+        if (onDecoded != null) {
+            onDecoded.invoke(text)
+            return
+        }
+        if (looksLikePairLink(text)) {
             val outcome = controller.onScannedPairLinkClassified(text)
             report(pairStatusText(outcome))
             if (outcome.isSuccessfulPair()) {

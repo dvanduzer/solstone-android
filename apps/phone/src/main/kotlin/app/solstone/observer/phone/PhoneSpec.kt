@@ -60,42 +60,21 @@ val phoneSpec = FormFactorSpec(
             context = context,
             coordinator = stores.journalIdentityCoordinator,
             onConfirmed = onConfirmed,
-            currentPairing = { (stores.publisher.currentSnapshot() as? PairingGraphSnapshot.Committed)?.pairing },
-            requestMark = {
-                val asked = (stores.publisher.currentSnapshot() as? PairingGraphSnapshot.Committed)?.pairing
-                if (asked != null) {
-                    val opener: () -> app.solstone.core.pl.PlHttpClient = {
-                        app.solstone.core.pl.openPairingClient(stores.publisher, { lease -> app.solstone.platform.pl.transport.conscrypt.openAuthenticatedLeaseClient(lease) })
-                    }
-                    stores.journalIdentityCoordinator.onMarkRequested(
-                        pairingMatches = { (stores.publisher.currentSnapshot() as? PairingGraphSnapshot.Committed)?.pairing == asked },
-                        openClient = opener,
-                    )
-                } else {
-                    null
-                }
-            },
+            currentPairing = { currentPairing(stores) },
+            requestMark = { requestPairingMark(stores) },
             onMismatch = {
-                val cleared = leaveJournal(
-                    dispatcher = Dispatchers.IO,
-                    revoke = { revokeThisDeviceOnJournal(stores.publisher) },
-                    forget = stores.publisher::forget,
-                    log = PhoneDiagLog::appendRaw,
-                ) is GraphMutationResult.Cleared
+                val cleared = performPhoneMismatch(stores)
                 if (cleared) {
-                    forgetPushAfterCleared(stores)
                     PairingMismatchResult.Disconnected
                 } else {
                     PairingMismatchResult.LocalFailure
                 }
             },
             onYes = { presented ->
-                if (confirmCurrentJournal(stores.publisher, stores.journalConfirmationStore, presented.clientCertFingerprint)) {
-                    SyncScheduler.enqueueAfterConfirm(context.applicationContext, PHONE_STREAM)
-                    true
-                } else {
-                    false
-                }
+                performPhoneConfirm(context, stores, presented.clientCertFingerprint)
+            },
+            onHelp = {
+                context.openUrl(app.solstone.observer.formfactor.phone.SUPPORT_SITE_URL)
             },
         )
     },

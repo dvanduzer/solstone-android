@@ -75,6 +75,9 @@ fun PhoneObserverScreen(
     onGrantPermissions: (String) -> Unit = {},
     onConnectJournal: () -> Unit = {},
     onOpenJournal: () -> Unit = onConnectJournal,
+    onSetOneUp: () -> Unit = {},
+    onSendLink: () -> Unit = {},
+    onAlreadyHaveOne: () -> Unit = onConnectJournal,
     journalPaired: Boolean = false,
     journalMarkPresentation: JournalMarkPresentation = JournalMarkPresentation.Generic,
     journalSheetOpen: Boolean = false,
@@ -130,6 +133,9 @@ fun PhoneObserverScreen(
         onGrantPermissions = onGrantPermissions,
         onConnectJournal = onConnectJournal,
         onOpenJournal = onOpenJournal,
+        onSetOneUp = onSetOneUp,
+        onSendLink = onSendLink,
+        onAlreadyHaveOne = onAlreadyHaveOne,
         journalPaired = journalPaired,
         journalMarkPresentation = journalMarkPresentation,
         journalSheetOpen = journalSheetOpen,
@@ -193,6 +199,9 @@ internal fun PhoneObserverScreen(
     onGrantPermissions: (String) -> Unit = {},
     onConnectJournal: () -> Unit = {},
     onOpenJournal: () -> Unit = onConnectJournal,
+    onSetOneUp: () -> Unit = {},
+    onSendLink: () -> Unit = {},
+    onAlreadyHaveOne: () -> Unit = onConnectJournal,
     journalPaired: Boolean = false,
     journalMarkPresentation: JournalMarkPresentation = JournalMarkPresentation.Generic,
     journalSheetOpen: Boolean = false,
@@ -292,6 +301,10 @@ internal fun PhoneObserverScreen(
         }
     }
     val popsDetail = resolveBack(paneStates, detailStack, widthClass).popsDetail
+    val navigateToJournalSetup = withHaptic {
+        detailStack = detailStack.showInDetail(PhoneRoute.JournalSetup)
+        onConnectJournal()
+    }
     LaunchedEffect(drawerState) {
         var previousTarget: DrawerValue? = null
         snapshotFlow { drawerState.targetValue }.collectLatest { target ->
@@ -342,7 +355,10 @@ internal fun PhoneObserverScreen(
                                 detailStack = detailStack.showInDetail(PhoneRoute.SourceDetail(id))
                             },
                             onConfirmMark = onConfirmMark,
-                            onConnectJournal = onConnectJournal,
+                            onConnectJournal = {
+                                paneStates = paneStates.close(PhonePane.STATUS)
+                                navigateToJournalSetup()
+                            },
                             journalFacts = journalFacts,
                             onOpenTechnicalDetails = {
                                 paneStates = paneStates.close(PhonePane.STATUS)
@@ -460,7 +476,10 @@ internal fun PhoneObserverScreen(
                         detailStack = detailStack.showInDetail(PhoneRoute.AddMore)
                     },
                     showWelcome = showWelcome,
-                    onConnectJournal = withHaptic(onConnectJournal),
+                    onConnectJournal = navigateToJournalSetup,
+                    onSetOneUp = withHaptic(onSetOneUp),
+                    onSendLink = withHaptic(onSendLink),
+                    onAlreadyHaveOne = withHaptic(onAlreadyHaveOne),
                     hour = hour,
                     isOnHome = homeTileStore::hasTile,
                     modifier = deckModifier,
@@ -492,7 +511,7 @@ internal fun PhoneObserverScreen(
                                 homeTileStore = homeTileStore,
                                 onStartObserving = onStartObserving,
                                 onGrantPermissions = onGrantPermissions,
-                                onConnectJournal = onConnectJournal,
+                                onConnectJournal = navigateToJournalSetup,
                                 onManageLocalStorage = onManageLocalStorage,
                                 journalPaired = journalPaired,
                                 journalFacts = journalFacts,
@@ -544,6 +563,9 @@ internal fun PhoneObserverScreen(
                                 journalVersion = status?.journalVersion,
                                 isOnHome = homeTileStore::hasTile,
                                 onToggle = onToggle,
+                                onSetOneUp = withHaptic(onSetOneUp),
+                                onSendLink = withHaptic(onSendLink),
+                                onAlreadyHaveOne = withHaptic(onAlreadyHaveOne),
                                 modifier = Modifier.padding(paddingValues),
                                 leadingSlot = if (top != null) {
                                     {
@@ -574,7 +596,7 @@ internal fun PhoneObserverScreen(
                     homeTileStore = homeTileStore,
                     onStartObserving = onStartObserving,
                     onGrantPermissions = onGrantPermissions,
-                    onConnectJournal = onConnectJournal,
+                    onConnectJournal = navigateToJournalSetup,
                     onManageLocalStorage = onManageLocalStorage,
                     journalPaired = journalPaired,
                     journalFacts = journalFacts,
@@ -626,6 +648,9 @@ internal fun PhoneObserverScreen(
                     journalVersion = status?.journalVersion,
                     isOnHome = homeTileStore::hasTile,
                     onToggle = onToggle,
+                    onSetOneUp = withHaptic(onSetOneUp),
+                    onSendLink = withHaptic(onSendLink),
+                    onAlreadyHaveOne = withHaptic(onAlreadyHaveOne),
                     modifier = modifier.padding(paddingValues),
                 )
             }

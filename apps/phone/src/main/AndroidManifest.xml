@@ -30,8 +30,15 @@
         android:theme="@style/PhoneShellTheme">
         <activity
             android:name="app.solstone.observer.scaffold.ObserverActivity"
+            android:exported="false" />
+        <activity
+            android:name=".PhoneShellActivity"
             android:exported="true"
-            android:launchMode="singleTop">
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -40,14 +47,6 @@
                     android:scheme="https"
                     android:host="go.solstone.app"
                     android:path="/p" />
-            </intent-filter>
-        </activity>
-        <activity
-            android:name=".PhoneShellActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
         <service

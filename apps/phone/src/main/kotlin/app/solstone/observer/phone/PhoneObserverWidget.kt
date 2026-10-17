@@ -65,7 +65,6 @@ import app.solstone.observer.formfactor.phone.renderPhoneObserverWidget
 import app.solstone.observer.formfactor.phone.sourceLabel
 import app.solstone.observer.harness.HarnessBacklogStatus
 import app.solstone.observer.harness.HarnessPlStatus
-import app.solstone.observer.scaffold.ObserverActivity
 import app.solstone.platform.fgs.ObserverForegroundService
 
 internal const val PHONE_WIDGET_AUDIO_SOURCE_ID = "audio"
@@ -98,15 +97,12 @@ class PhoneWidgetConfirmMarkAction : ActionCallback {
             awaitingMarkConfirmation = phoneAwaitingMarkConfirmation(context),
             promptedConfirmationThisProcess = PhoneShellActivity.promptedConfirmationThisProcess,
         )
-        val intent = if (route == MarkConfirmationRoute.CONFIRM) {
-            Intent(context, ObserverActivity::class.java).apply {
-                putExtra(ObserverActivity.EXTRA_CONFIRM_JOURNAL, true)
+        val intent = Intent(context, PhoneShellActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            if (route == MarkConfirmationRoute.CONFIRM) {
+                putExtra(PhoneShellActivity.EXTRA_OPEN_MARK, true)
             }
-        } else {
-            // The widget drops what it has no room for, so a tap must reach where all of it is.
-            Intent(context, PhoneShellActivity::class.java)
         }
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
         context.startActivity(intent)
     }
 }

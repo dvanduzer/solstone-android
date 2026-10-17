@@ -36,13 +36,13 @@ appId: app.solstone.observer.phone
 # The welcome card an owner meets. Nothing has been asked for yet.
 - extendedWaitUntil:
     visible:
-      text: "connect a journal"
+      text: "i already have one"
     timeout: 20000
 
 # 🔴 The A1 path. Tapping the welcome card's main call to action (welcomeConnectJournal, not the journal mark pill) must reach the system camera prompt —
 # not a camera.
 - tapOn:
-    text: "connect a journal"
+    text: "i already have one"
 
 - extendedWaitUntil:
     visible:
@@ -72,7 +72,7 @@ appId: app.solstone.observer.phone
 - back
 - extendedWaitUntil:
     visible:
-      text: "connect a journal"
+      text: "welcome to solstone."
     timeout: 15000
 - assertVisible:
     text: "camera"

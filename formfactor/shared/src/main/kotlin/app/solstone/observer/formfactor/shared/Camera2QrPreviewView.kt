@@ -38,6 +38,7 @@ class Camera2QrPreviewView(
     context: Context,
     private val controller: HarnessController,
     threadLabel: String,
+    private val onDecoded: ((String) -> Unit)? = null,
     private val status: (String) -> Unit,
 ) : TextureView(context), TextureView.SurfaceTextureListener {
     private val reader = MultiFormatReader()
@@ -214,7 +215,12 @@ class Camera2QrPreviewView(
     }
 
     private fun handleDecodedText(text: String) {
-        if (looksLikePairLink(text) && !closed) {
+        if (closed) return
+        if (onDecoded != null) {
+            onDecoded.invoke(text)
+            return
+        }
+        if (looksLikePairLink(text)) {
             val outcome = controller.onScannedPairLinkClassified(text)
             report(pairStatusText(outcome))
             if (outcome.isSuccessfulPair()) {

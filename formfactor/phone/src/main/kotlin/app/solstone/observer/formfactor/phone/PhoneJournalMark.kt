@@ -577,9 +577,11 @@ fun PairingSuccessMark(
     coordinator: JournalIdentityRefreshCoordinator?,
     onConfirmed: () -> Unit = {},
     onMismatch: suspend () -> PairingMismatchResult = { PairingMismatchResult.Disconnected },
+    onMismatchCleared: () -> Unit = { onConfirmed() },
     onYes: ((PairingGeneration) -> Boolean)? = null,
     requestMark: (() -> Long?)? = null,
     currentPairing: () -> PairingGeneration? = { null },
+    onHelp: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val activePairing = currentPairing()
@@ -680,14 +682,15 @@ fun PairingSuccessMark(
         }
     }
 
-    val onDropClick: () -> Unit = {
+    val onDropClick: () -> Unit = onDropClick@{
+        if (confirmation == PairingConfirmation.Removing) return@onDropClick
         confirmation = PairingConfirmation.Removing
         scope.launch {
             mismatchResult = withContext(Dispatchers.IO) { onMismatch() }
             confirmation = if (mismatchResult == PairingMismatchResult.LocalFailure) {
                 PairingConfirmation.Failed
             } else {
-                onConfirmed()
+                onMismatchCleared()
                 PairingConfirmation.Mismatched
             }
         }
@@ -818,6 +821,26 @@ fun PairingSuccessMark(
                 ) { Text("try again") }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onDropClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .testTag("pairingScanAgain"),
+        ) {
+            Text("scan again")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onHelp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .testTag("pairingGetHelp"),
+        ) {
+            Text("get help")
+        }
     }
 }
 
@@ -833,6 +856,7 @@ fun createPhonePairingMarkView(
     onYes: ((PairingGeneration) -> Boolean)? = null,
     requestMark: (() -> Long?)? = null,
     currentPairing: () -> PairingGeneration? = { null },
+    onHelp: () -> Unit = {},
 ): View {
     return ComposeView(context).apply {
         setContent {
@@ -844,6 +868,7 @@ fun createPhonePairingMarkView(
                     onYes = onYes,
                     requestMark = requestMark,
                     currentPairing = currentPairing,
+                    onHelp = onHelp,
                 )
             }
         }

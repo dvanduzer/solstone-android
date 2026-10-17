@@ -5,10 +5,49 @@ package app.solstone.core.pl
 
 import app.solstone.core.crypto.hex
 import java.io.ByteArrayOutputStream
+import java.net.URI
 import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
+
+sealed interface PairLinkAcceptance {
+    data class Accepted(val canonicalHttps: String, val parsed: PairLink) : PairLinkAcceptance
+    data object Rejected : PairLinkAcceptance
+}
+
+fun acceptPairLink(raw: String): PairLinkAcceptance {
+    val trimmed = raw.trim()
+    if (trimmed.contains('?') || trimmed.startsWith('#')) {
+        return PairLinkAcceptance.Rejected
+    }
+    return try {
+        val uri = URI(trimmed)
+        val scheme = uri.scheme?.lowercase()
+        when (scheme) {
+            "https" -> {
+                val parsed = parsePairLink(trimmed)
+                PairLinkAcceptance.Accepted(canonicalHttps = trimmed, parsed = parsed)
+            }
+            "solstone" -> {
+                val host = uri.host?.lowercase()
+                val authority = uri.authority?.lowercase()
+                val path = uri.path.orEmpty()
+                val fragment = uri.rawFragment
+                if (host == "pair" && authority == "pair" && (path.isEmpty() || path == "/") && !fragment.isNullOrEmpty()) {
+                    val canonicalHttps = "https://go.solstone.app/p#$fragment"
+                    val parsed = parsePairLink(canonicalHttps)
+                    PairLinkAcceptance.Accepted(canonicalHttps = canonicalHttps, parsed = parsed)
+                } else {
+                    PairLinkAcceptance.Rejected
+                }
+            }
+            else -> PairLinkAcceptance.Rejected
+        }
+    } catch (_: Exception) {
+        PairLinkAcceptance.Rejected
+    }
+}
 
 const val DEFAULT_DIRECT_PORT = 7657
 val RECOGNIZED_PAIR_HOSTS = setOf("go.solstone.app")

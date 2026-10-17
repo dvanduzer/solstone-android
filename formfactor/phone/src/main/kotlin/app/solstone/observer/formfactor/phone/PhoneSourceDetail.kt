@@ -141,7 +141,6 @@ private fun reasonRetryIsHonest(reason: ReasonCode): Boolean = when (reason) {
 }
 
 private val DEVICE_LEVEL_REASONS = setOf(
-    ReasonCode.UNPAIRED,
     ReasonCode.AUTH_REVOKED,
     ReasonCode.SERVICE_KILLED,
     ReasonCode.PERSISTENCE_FAILED,
@@ -280,6 +279,24 @@ private fun SourceDetailTemplate(
             onConnectJournal = onConnectJournal,
             onManageLocalStorage = onManageLocalStorage,
         )
+    }
+    if (status.state == SourceState.ON && !paired) {
+        Spacer(Modifier.height(ShellMetrics.sectionSpacing))
+        Text(
+            text = "on this device and not processed until you connect a journal.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = shellSecondaryInk,
+        )
+        Spacer(Modifier.height(ShellMetrics.sectionSpacing))
+        Button(
+            onClick = onConnectJournal,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .testTag("sourceDetailJournalSetup"),
+        ) {
+            Text("connect a journal")
+        }
     }
     if (sourceEarnsSwitch(status.sourceId)) {
         // ⛔ No section heading here: the app bar already names the source, and a

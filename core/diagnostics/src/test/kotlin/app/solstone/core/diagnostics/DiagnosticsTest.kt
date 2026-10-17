@@ -100,7 +100,6 @@ class DiagnosticsTest {
         val faults = mapOf(
             "permission" to healthy().copy(permissionGranted = false),
             "auth revoked" to healthy().copy(pairing = PairingFact.REVOKED),
-            "unpaired" to healthy().copy(pairing = PairingFact.UNPAIRED),
             "persistence" to healthy().copy(identityPersistenceOk = false),
             "storage" to healthy().copy(storageOk = false),
             "service killed" to healthy().copy(fgsHeartbeatFresh = false),
@@ -125,6 +124,14 @@ class DiagnosticsTest {
                 "$name claimed a source the owner never asked for",
             )
         }
+        assertEquals(
+            SourceState.ON to ReasonCode.NONE,
+            reduce(healthy().copy(pairing = PairingFact.UNPAIRED)),
+        )
+        assertEquals(
+            SourceState.READY_TO_SET_UP to ReasonCode.NONE,
+            reduce(healthy().copy(pairing = PairingFact.UNPAIRED, wishExpressed = false)),
+        )
     }
 
     @Test
@@ -151,10 +158,20 @@ class DiagnosticsTest {
         assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.SERVICE_KILLED, reduce(healthy().copy(fgsHeartbeatFresh = false)))
         assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.PERSISTENCE_FAILED, reduce(healthy().copy(identityPersistenceOk = false)))
         assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.REBOOTED, reduce(healthy().copy(engineRunning = false)))
-        assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.UNPAIRED, reduce(healthy().copy(pairing = PairingFact.UNPAIRED)))
+        assertEquals(SourceState.ON to ReasonCode.NONE, reduce(healthy().copy(pairing = PairingFact.UNPAIRED)))
         assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.STORAGE_FULL, reduce(healthy().copy(storageOk = false)))
         assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.PROVIDER_SILENT, reduce(healthy().copy(providerEmitting = false)))
         assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.AUTH_REVOKED, reduce(healthy().copy(pairing = PairingFact.REVOKED)))
+
+        val unpairedBase = healthy().copy(pairing = PairingFact.UNPAIRED)
+        assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.STORAGE_FULL, reduce(unpairedBase.copy(storageOk = false)))
+        assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.PROVIDER_SILENT, reduce(unpairedBase.copy(providerEmitting = false)))
+        assertEquals(SourceState.PAUSED to ReasonCode.NONE, reduce(unpairedBase.copy(paused = true)))
+        assertEquals(SourceState.PAUSED to ReasonCode.MICROPHONE_SILENCED, reduce(unpairedBase.copy(silenced = SilencedFact.SILENCED)))
+        assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.REBOOTED, reduce(unpairedBase.copy(engineRunning = false)))
+        assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.PERMISSION_REVOKED, reduce(unpairedBase.copy(permissionGranted = false)))
+        assertEquals(SourceState.OFF to ReasonCode.NONE, reduce(unpairedBase.copy(desiredOn = false)))
+        assertEquals(SourceState.READY_TO_SET_UP to ReasonCode.NONE, reduce(unpairedBase.copy(wishExpressed = false)))
     }
 
     @Test
@@ -240,9 +257,8 @@ class DiagnosticsTest {
         )
 
         assertEquals(SourceState.SETTING_UP to ReasonCode.NONE, reduce(neverStarted))
-        // Unpaired is the honest reason in that window, and it is no longer masked.
         assertEquals(
-            SourceState.NEEDS_ATTENTION to ReasonCode.UNPAIRED,
+            SourceState.SETTING_UP to ReasonCode.NONE,
             reduce(neverStarted.copy(pairing = PairingFact.UNPAIRED)),
         )
         // Control: the same stale heartbeat WITH start evidence is still a kill.
@@ -332,7 +348,7 @@ class DiagnosticsTest {
 
     @Test
     fun reduceMapsPairingFacts() {
-        assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.UNPAIRED, reduce(healthy().copy(pairing = PairingFact.UNPAIRED)))
+        assertEquals(SourceState.ON to ReasonCode.NONE, reduce(healthy().copy(pairing = PairingFact.UNPAIRED)))
         assertEquals(SourceState.NEEDS_ATTENTION to ReasonCode.AUTH_REVOKED, reduce(healthy().copy(pairing = PairingFact.REVOKED)))
     }
 

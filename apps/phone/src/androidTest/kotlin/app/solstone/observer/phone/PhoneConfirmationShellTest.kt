@@ -38,6 +38,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -134,35 +135,13 @@ class PhoneConfirmationShellTest {
         val monitor = instrumentation.addMonitor(ObserverActivity::class.java.name, null, false)
         try {
             ActivityScenario.launch(PhoneShellActivity::class.java).use { scenario ->
-                val observerActivity = instrumentation.waitForMonitorWithTimeout(monitor, 5000) as? ObserverActivity
-                assertNotNull("ObserverActivity must be started", observerActivity)
-                assertTrue(observerActivity!!.intent.getBooleanExtra(ObserverActivity.EXTRA_CONFIRM_JOURNAL, false))
-
-                // The prompt opens connecting and moves to couldn't-verify when its mark check
-                // against this fake journal fails, on the check's own schedule. Either state is
-                // the prompt; which one a frame shows is timing, not this flow's contract.
-                composeRule.waitUntil(5_000) {
-                    composeRule.onAllNodesWithTag("pairingConnecting").fetchSemanticsNodes().isNotEmpty() ||
-                        composeRule.onAllNodesWithTag("pairingContinueAnyway").fetchSemanticsNodes().isNotEmpty()
-                }
-
-                val labels = buttonLabels(observerActivity)
-                MENU_ONLY_CONTROLS.forEach {
-                    assertFalse("ObserverActivity must not show operator control $it; saw $labels", labels.contains(it))
-                }
-                assertFalse("ObserverActivity must not draw Back; saw $labels", labels.contains("Back"))
+                val observerActivity = instrumentation.waitForMonitorWithTimeout(monitor, 1000) as? ObserverActivity
+                assertNull("ObserverActivity must not be started", observerActivity)
+                assertEquals(0, monitor.hits)
 
                 assertEquals(0, sessionCalls.get())
                 composeRule.onNodeWithText("close").assertDoesNotExist()
 
-                instrumentation.runOnMainSync {
-                    @Suppress("DEPRECATION")
-                    observerActivity.onBackPressed()
-                }
-                assertTrue("ObserverActivity must be finishing after back", observerActivity.isFinishing)
-                instrumentation.waitForIdleSync()
-
-                // After returning to shell, those 5 labels are still absent
                 scenario.onActivity { shell ->
                     val shellLabels = buttonLabels(shell)
                     MENU_ONLY_CONTROLS.forEach {
@@ -184,14 +163,9 @@ class PhoneConfirmationShellTest {
         val monitor2 = instrumentation.addMonitor(ObserverActivity::class.java.name, null, false)
         try {
             ActivityScenario.launch(PhoneShellActivity::class.java).use { scenario ->
-                val observerActivity2 = instrumentation.waitForMonitorWithTimeout(monitor2, 5000) as? ObserverActivity
-                assertNotNull("ObserverActivity must be started on fresh launch", observerActivity2)
-                assertTrue(observerActivity2!!.intent.getBooleanExtra(ObserverActivity.EXTRA_CONFIRM_JOURNAL, false))
-                instrumentation.runOnMainSync {
-                    @Suppress("DEPRECATION")
-                    observerActivity2.onBackPressed()
-                }
-                instrumentation.waitForIdleSync()
+                val observerActivity2 = instrumentation.waitForMonitorWithTimeout(monitor2, 1000) as? ObserverActivity
+                assertNull("ObserverActivity must not be started on fresh launch", observerActivity2)
+                assertEquals(0, monitor2.hits)
 
                 // On shell, confirmCurrentJournal is true
                 val confirmed = confirmCurrentJournal(publisher, confirmStore, "sha256:held-shell")
@@ -261,18 +235,12 @@ class PhoneConfirmationShellTest {
         try {
             ActivityScenario.launch(PhoneShellActivity::class.java).use {
                 composeRule.onNodeWithTag("journalMarkPill").performClick()
-                val startedActivity = instrumentation.waitForMonitorWithTimeout(monitor, 5000) as? ObserverActivity
-                assertNotNull("ObserverActivity must be started on pill click while held", startedActivity)
-                assertTrue(startedActivity!!.intent.getBooleanExtra(ObserverActivity.EXTRA_CONFIRM_JOURNAL, false))
+                val startedActivity = instrumentation.waitForMonitorWithTimeout(monitor, 1000) as? ObserverActivity
+                assertNull("ObserverActivity must not be started on pill click while held", startedActivity)
+                assertEquals(0, monitor.hits)
 
                 assertEquals(0, sessionCalls.get())
                 composeRule.onNodeWithText("close").assertDoesNotExist()
-
-                instrumentation.runOnMainSync {
-                    @Suppress("DEPRECATION")
-                    startedActivity.onBackPressed()
-                }
-                instrumentation.waitForIdleSync()
             }
         } finally {
             instrumentation.removeMonitor(monitor)
