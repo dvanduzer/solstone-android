@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -628,7 +629,9 @@ class PhoneJournalMarkConfirmationComposeTest {
 
         // Release latch
         releaseTicketClient.countDown()
-        composeRule.waitForIdle()
+        composeRule.waitUntil(10_000) {
+            composeRule.onAllNodesWithTag(PAIRING_CONTINUE_ANYWAY_TAG).fetchSemanticsNodes().isNotEmpty()
+        }
 
         // pairingContinueAnyway is enabled, and lambda was still called once
         composeRule.onNodeWithTag(PAIRING_CONTINUE_ANYWAY_TAG).assertIsEnabled()
