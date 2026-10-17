@@ -16,6 +16,8 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -25,6 +27,11 @@ import androidx.test.rule.GrantPermissionRule
 import app.solstone.core.identity.ClientCredential
 import app.solstone.core.identity.GraphMutationResult
 import app.solstone.core.identity.JournalConfirmationPolicy
+import app.solstone.core.identity.JournalMark
+import app.solstone.core.identity.JournalMarkIcon
+import app.solstone.core.identity.JournalMarkRecord
+import app.solstone.core.identity.PairingGraphSnapshot
+import app.solstone.platform.work.SyncStores
 import app.solstone.core.model.IdentityState
 import app.solstone.core.model.PairedHome
 import app.solstone.core.pl.browser.JournalBrowserLifecycleListener
@@ -32,7 +39,6 @@ import app.solstone.core.pl.browser.JournalBrowserOrigin
 import app.solstone.observer.scaffold.ObserverActivity
 import app.solstone.platform.fgs.ObserverForegroundService
 import app.solstone.platform.fgs.ObserverNotification
-import app.solstone.platform.work.confirmCurrentJournal
 import app.solstone.platform.work.syncStores
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -77,6 +83,8 @@ class PhoneConfirmationShellTest {
         resetPersistence(context)
         cleanupForegroundServiceAndNotifications()
         PhoneShellActivity.promptedConfirmationThisProcess = false
+        assertTrue(syncStores(context).publisher.forget() is GraphMutationResult.Cleared)
+        syncStores(context).journalConfirmationStore.settle()
     }
 
     @After
@@ -85,7 +93,8 @@ class PhoneConfirmationShellTest {
         cleanupForegroundServiceAndNotifications()
         PhoneJournalTestHooks.reset()
         PhoneShellActivity.promptedConfirmationThisProcess = false
-        runCatching { syncStores(context).publisher.forget() }
+        assertTrue(syncStores(context).publisher.forget() is GraphMutationResult.Cleared)
+        syncStores(context).journalConfirmationStore.settle()
     }
 
     @Test
@@ -94,7 +103,7 @@ class PhoneConfirmationShellTest {
     }
 
     @Test
-    fun unconfirmedPairingPromptsObserverActivityAndFlowCompletes() {
+    fun unconfirmedPairingPromptsCurrentShellAndFlowCompletes() {
         val container = obtainObserverContainer()
         assertTrue(waitForRecovery(container))
         val stores = syncStores(context)
@@ -121,6 +130,7 @@ class PhoneConfirmationShellTest {
         )
         val installResult = publisher.installOrReplace(home, cred, null, false)
         assertTrue(installResult is GraphMutationResult.Applied)
+        seedMark(stores)
 
         confirmStore.confirm("sha256:not-this")
         PhoneShellActivity.promptedConfirmationThisProcess = false
@@ -167,9 +177,11 @@ class PhoneConfirmationShellTest {
                 assertNull("ObserverActivity must not be started on fresh launch", observerActivity2)
                 assertEquals(0, monitor2.hits)
 
-                // On shell, confirmCurrentJournal is true
-                val confirmed = confirmCurrentJournal(publisher, confirmStore, "sha256:held-shell")
-                assertTrue(confirmed)
+                composeRule.onNodeWithText("yes, this is my journal")
+                    .performScrollTo().assertIsEnabled().performClick()
+                composeRule.waitUntil(10_000) {
+                    composeRule.onAllNodesWithTag("journalMarkPill").fetchSemanticsNodes().isNotEmpty()
+                }
 
                 val hitsBeforeRecreate = monitor2.hits
                 scenario.recreate()
@@ -193,7 +205,7 @@ class PhoneConfirmationShellTest {
     }
 
     @Test
-    fun pillClickWhileHeldStartsObserverActivityAndKeepsJournalSheetClosed() {
+    fun pillClickWhileHeldReopensCurrentConfirmationAndKeepsJournalSheetClosed() {
         val container = obtainObserverContainer()
         assertTrue(waitForRecovery(container))
         val stores = syncStores(context)
@@ -220,6 +232,7 @@ class PhoneConfirmationShellTest {
         )
         val installResult = publisher.installOrReplace(home, cred, null, false)
         assertTrue(installResult is GraphMutationResult.Applied)
+        seedMark(stores)
 
         confirmStore.confirm("sha256:not-this")
         PhoneShellActivity.promptedConfirmationThisProcess = true
@@ -233,8 +246,11 @@ class PhoneConfirmationShellTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val monitor = instrumentation.addMonitor(ObserverActivity::class.java.name, null, false)
         try {
-            ActivityScenario.launch(PhoneShellActivity::class.java).use {
+            ActivityScenario.launch(PhoneShellActivity::class.java).use { scenario ->
+                composeRule.onNodeWithText("yes, this is my journal").assertExists()
+                scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
                 composeRule.onNodeWithTag("journalMarkPill").performClick()
+                composeRule.onNodeWithText("yes, this is my journal").assertExists()
                 val startedActivity = instrumentation.waitForMonitorWithTimeout(monitor, 1000) as? ObserverActivity
                 assertNull("ObserverActivity must not be started on pill click while held", startedActivity)
                 assertEquals(0, monitor.hits)
@@ -245,6 +261,17 @@ class PhoneConfirmationShellTest {
         } finally {
             instrumentation.removeMonitor(monitor)
         }
+    }
+
+    private fun seedMark(stores: SyncStores) {
+        val pairing = (stores.publisher.currentSnapshot() as PairingGraphSnapshot.Committed).pairing
+        val mark = JournalMark(
+            JournalMarkIcon("piano", "<path d=\"M18.5 3H5.5\"/>", "blue", "#3b82f6", 45),
+            JournalMarkIcon("key", "<circle cx=\"7.5\" cy=\"15.5\" r=\"5.5\"/>", "purple", "#a855f7", 0),
+            listOf("liquefy", "smock"),
+        )
+        stores.journalMarkStore.save(JournalMarkRecord(pairing.instanceId, mark, pairing))
+        stores.journalIdentityCoordinator.onPairingChanged()
     }
 
     private fun buttonLabels(activity: Activity): List<String> =
