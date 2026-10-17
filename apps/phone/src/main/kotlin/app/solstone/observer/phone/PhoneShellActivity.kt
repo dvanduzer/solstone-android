@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import app.solstone.observer.formfactor.phone.EXTRA_PHONE_ROUTE
 import app.solstone.observer.formfactor.phone.PhoneObserverScreen
+import app.solstone.observer.formfactor.phone.PhoneRoute
 import app.solstone.observer.formfactor.phone.PhoneRouteStack
 import app.solstone.observer.formfactor.phone.PhoneStatusSnapshot
 import app.solstone.observer.formfactor.phone.PhoneStatusViewModel
@@ -166,6 +167,7 @@ class PhoneShellActivity : ComponentActivity() {
     private var journalPath by mutableStateOf<String?>(null)
     private var journalOpen by mutableStateOf(false)
     private var journalOpenSequence by mutableStateOf(0L)
+    private var incomingDetail by mutableStateOf<Pair<Long, PhoneRoute>?>(null)
     private var journalPushOn by mutableStateOf(false)
     private var journalDeliveredBy by mutableStateOf<String?>(null)
     private var pushFactsExecutor: ExecutorService? = null
@@ -258,6 +260,14 @@ class PhoneShellActivity : ComponentActivity() {
             return
         }
         if (isAwaitingMarkConfirmation() || pairingViewModel.pairingState.session !is PhonePairingSession.Closed) return
+        if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+        if (!cold) {
+            intent.getStringExtra(EXTRA_PHONE_ROUTE)?.let(::decodePhoneRoute)?.let { route ->
+                journalOpen = false
+                incomingDetail = ((incomingDetail?.first ?: 0L) + 1L) to route
+                return
+            }
+        }
         val path = journalOpenPath(
             pushRegistration = BuildConfig.PUSH_REGISTRATION,
             freshCreate = true,
@@ -970,6 +980,7 @@ class PhoneShellActivity : ComponentActivity() {
                     }
                 },
                 initial = capture.stack,
+                incomingDetail = incomingDetail,
                 initialShelfOpen = capture.shelfOpen,
                 initialStatusOpen = capture.statusOpen,
                 version = appVersion,

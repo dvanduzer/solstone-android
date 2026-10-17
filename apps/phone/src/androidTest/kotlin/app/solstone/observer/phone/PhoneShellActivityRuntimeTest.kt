@@ -3,6 +3,13 @@
 
 package app.solstone.observer.phone
 
+import android.app.PendingIntent
+import android.content.Intent
+import android.view.KeyEvent
+import androidx.test.platform.app.InstrumentationRegistry
+import app.solstone.observer.formfactor.phone.EXTRA_PHONE_ROUTE
+import app.solstone.observer.formfactor.phone.PhoneRoute
+import app.solstone.observer.formfactor.phone.encodePhoneRoute
 import android.Manifest
 import android.content.Context
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -62,6 +69,51 @@ class PhoneShellActivityRuntimeTest {
             composeRule.onNodeWithTag("sourceTile-audio").assertIsDisplayed()
             composeRule.onNodeWithTag("sourceTile-location").assertIsDisplayed()
             assertEquals(2, composeRule.onAllNodes(sourceTileMatcher()).fetchSemanticsNodes().size)
+        }
+    }
+
+    @Test
+    fun sourceAttentionIntentReusesShellAndReopensDetailAfterBack() {
+        val scenario = ActivityScenario.launch(PhoneShellActivity::class.java)
+        var original: PhoneShellActivity? = null
+        scenario.onActivity { original = it }
+        val intent = Intent(context, PhoneShellActivity::class.java).apply {
+            putExtra(EXTRA_PHONE_ROUTE, encodePhoneRoute(PhoneRoute.SourceDetail("audio")))
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pending = PendingIntent.getActivity(context, 99120, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        try {
+            repeat(2) {
+                pending.send()
+                composeRule.waitUntil(10_000) {
+                    composeRule.onAllNodes(androidx.compose.ui.test.hasTestTag("sourceDetailVerdict"))
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                composeRule.onNodeWithTag("sourceDetailVerdict").assertIsDisplayed()
+                composeRule.onNode(SemanticsMatcher("audio heading") { node ->
+                    node.config.contains(SemanticsProperties.Heading) &&
+                        node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "audio" } == true
+                }).assertIsDisplayed()
+                scenario.onActivity { assertTrue(original === it) }
+                InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                composeRule.waitUntil(10_000) {
+                    composeRule.onAllNodes(androidx.compose.ui.test.hasTestTag("sourceDetailVerdict"))
+                        .fetchSemanticsNodes().isEmpty()
+                }
+            }
+            scenario.onActivity {
+                InstrumentationRegistry.getInstrumentation().callActivityOnNewIntent(it, Intent(context, PhoneShellActivity::class.java).apply {
+                    putExtra(EXTRA_PHONE_ROUTE, encodePhoneRoute(PhoneRoute.SourceDetail("audio")))
+                    flags = Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY
+                })
+            }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithTag("sourceDetailVerdict").assertDoesNotExist()
+        } finally {
+            pending.cancel()
+            InstrumentationRegistry.getInstrumentation().runOnMainSync { original?.finish() }
+            waitUntil("warm source shell destroyed") { original?.isDestroyed == true }
         }
     }
 

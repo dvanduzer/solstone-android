@@ -115,6 +115,7 @@ fun PhoneObserverScreen(
     technicalDetailsRequest: Long = 0,
     modifier: Modifier = Modifier,
     initial: PhoneRouteStack = PhoneRouteStack.Empty,
+    incomingDetail: Pair<Long, PhoneRoute>? = null,
     initialShelfOpen: Boolean = false,
     initialStatusOpen: Boolean = false,
     version: String = "",
@@ -175,6 +176,7 @@ fun PhoneObserverScreen(
         technicalDetailsRequest = technicalDetailsRequest,
         modifier = modifier,
         initial = initial,
+        incomingDetail = incomingDetail,
         initialShelfOpen = initialShelfOpen,
         initialStatusOpen = initialStatusOpen,
         version = version,
@@ -243,6 +245,7 @@ internal fun PhoneObserverScreen(
     technicalDetailsRequest: Long = 0,
     modifier: Modifier = Modifier,
     initial: PhoneRouteStack = PhoneRouteStack.Empty,
+    incomingDetail: Pair<Long, PhoneRoute>? = null,
     initialShelfOpen: Boolean = false,
     initialStatusOpen: Boolean = false,
     version: String = "",
@@ -263,6 +266,13 @@ internal fun PhoneObserverScreen(
     val drawerState = rememberDrawerState(
         if (initialShelfOpen) DrawerValue.Open else DrawerValue.Closed,
     )
+    LaunchedEffect(incomingDetail) {
+        incomingDetail?.let { (_, route) ->
+            paneStates = PaneStates.Empty
+            drawerState.close()
+            detailStack = detailStack.showInDetail(route)
+        }
+    }
     val latestPaneStates by rememberUpdatedState(paneStates)
     val scope = rememberCoroutineScope()
     val applicationContext = LocalContext.current.applicationContext
