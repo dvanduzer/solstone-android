@@ -3,8 +3,16 @@
 
 package app.solstone.core.pl
 
+/**
+ * The pair request body. `platform` is the optional SPL pairing hint; the journal names
+ * this device's new streams from it instead of its generic fallback.
+ */
 data class PairRequest(val csr: String, val deviceLabel: String) {
-    fun toJson(): String = toJson(mapOf("csr" to csr, "device_label" to deviceLabel))
+    fun toJson(): String = toJson(mapOf("csr" to csr, "device_label" to deviceLabel, "platform" to PLATFORM))
+
+    companion object {
+        const val PLATFORM = "android"
+    }
 }
 
 sealed class PairRelayAccess {

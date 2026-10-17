@@ -10,7 +10,10 @@ import kotlin.test.assertFailsWith
 class PairApiTest {
     @Test
     fun pairRequestUsesReferenceFieldNames() {
-        assertEquals("""{"csr":"csr-pem","device_label":"device"}""", PairRequest("csr-pem", "device").toJson())
+        assertEquals(
+            """{"csr":"csr-pem","device_label":"device","platform":"android"}""",
+            PairRequest("csr-pem", "device").toJson(),
+        )
     }
 
     @Test

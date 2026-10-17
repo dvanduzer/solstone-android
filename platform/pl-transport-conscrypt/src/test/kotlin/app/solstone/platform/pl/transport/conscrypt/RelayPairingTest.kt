@@ -146,6 +146,7 @@ class RelayPairingTest {
         assertEquals("/app/network/pair?token=0123456789abcdef", session.requests.single().path)
         val pairBody = parseJson(session.requests.single().body!!.toString(Charsets.UTF_8)) as Map<*, *>
         assertEquals("glasses", pairBody["device_label"])
+        assertEquals("android", pairBody["platform"])
         assertTrue((pairBody["csr"] as String).contains("BEGIN CERTIFICATE REQUEST"))
         val enrollBody = parseJson(poster.enrollBodies.single().toString(Charsets.UTF_8)) as Map<*, *>
         assertEquals(setOf("instance_id", "home_attestation", "protocol_version"), enrollBody.keys)
