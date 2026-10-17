@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.24] - 2026-10-16
+
+### Added
+
+- screen is a new source. while it's on, the solstone app takes in video of the app or screen you choose, including while you use other apps, and it goes into your journal. android asks each time you turn it on, and you can stop it from the app or from android's own controls. after your phone restarts, screen stays off until you turn it on again and choose what to share.
+
 ## [2.1.23] - 2026-10-13
 
 ### Fixed
