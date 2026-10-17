@@ -578,10 +578,11 @@ fun PairingSuccessMark(
     onConfirmed: () -> Unit = {},
     onMismatch: suspend () -> PairingMismatchResult = { PairingMismatchResult.Disconnected },
     onMismatchCleared: () -> Unit = { onConfirmed() },
-    onYes: ((PairingGeneration) -> Boolean)? = null,
+    onYes: (suspend (PairingGeneration) -> Boolean)? = null,
     requestMark: (() -> Long?)? = null,
     currentPairing: () -> PairingGeneration? = { null },
     onHelp: () -> Unit = {},
+    cleanupInProgress: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val activePairing = currentPairing()
@@ -669,7 +670,7 @@ fun PairingSuccessMark(
 
     val onConfirmClick: () -> Unit = {
         val presented = generation
-        if (presented != null) {
+        if (presented != null && !cleanupInProgress) {
             scope.launch {
                 val ok = withContext(Dispatchers.IO) {
                     onYes?.invoke(presented) == true
@@ -683,7 +684,7 @@ fun PairingSuccessMark(
     }
 
     val onDropClick: () -> Unit = onDropClick@{
-        if (confirmation == PairingConfirmation.Removing) return@onDropClick
+        if (cleanupInProgress || confirmation == PairingConfirmation.Removing) return@onDropClick
         confirmation = PairingConfirmation.Removing
         scope.launch {
             mismatchResult = withContext(Dispatchers.IO) { onMismatch() }
@@ -705,7 +706,7 @@ fun PairingSuccessMark(
             JournalMarkCard(presentation = card)
             Spacer(Modifier.height(20.dp))
         }
-        when (confirmation) {
+        when (if (cleanupInProgress) PairingConfirmation.Removing else confirmation) {
             PairingConfirmation.Waiting -> {
                 when (shape) {
                     is PairingPromptShape.Connecting -> {
@@ -824,6 +825,7 @@ fun PairingSuccessMark(
         Spacer(Modifier.height(8.dp))
         OutlinedButton(
             onClick = onDropClick,
+            enabled = !cleanupInProgress && confirmation != PairingConfirmation.Removing,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp)
@@ -853,7 +855,7 @@ fun createPhonePairingMarkView(
     coordinator: JournalIdentityRefreshCoordinator?,
     onConfirmed: () -> Unit,
     onMismatch: suspend () -> PairingMismatchResult,
-    onYes: ((PairingGeneration) -> Boolean)? = null,
+    onYes: (suspend (PairingGeneration) -> Boolean)? = null,
     requestMark: (() -> Long?)? = null,
     currentPairing: () -> PairingGeneration? = { null },
     onHelp: () -> Unit = {},

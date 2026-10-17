@@ -15,6 +15,15 @@ import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.solstone.platform.work.syncStores
+import app.solstone.core.identity.GraphMutationResult
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertTextContains
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -22,20 +31,26 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.Rule
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class PhoneAppLinksRuntimeTest {
+    @get:Rule val composeRule = createEmptyComposeRule()
     private val application: Application = ApplicationProvider.getApplicationContext()
 
     @Before
     fun setUp() {
         resetObserverRuntime()
         resetPersistence(application)
+        assertTrue(syncStores(application).publisher.forget() is GraphMutationResult.Cleared)
+        syncStores(application).journalConfirmationStore.settle()
     }
 
     @After
     fun tearDown() {
+        assertTrue(syncStores(application).publisher.forget() is GraphMutationResult.Cleared)
+        syncStores(application).journalConfirmationStore.settle()
         resetObserverRuntime()
     }
 
@@ -57,6 +72,7 @@ class PhoneAppLinksRuntimeTest {
     @Test
     fun coldPairAppLinkWithGarbageFragmentShowsInvalidWithoutCamera() {
         ActivityScenario.launch<PhoneShellActivity>(explicitView("https://go.solstone.app/p#garbage")).use { scenario ->
+            assertInvalidPasteEntry()
             scenario.onActivity { activity ->
                 assertTrue(activity is PhoneShellActivity)
                 assertFalse(allViews(activity).any { it.javaClass.simpleName.contains("QrPreviewView") })
@@ -67,6 +83,7 @@ class PhoneAppLinksRuntimeTest {
     @Test
     fun explicitlyDeliveredWrongPathShowsInvalidLink() {
         ActivityScenario.launch<PhoneShellActivity>(explicitView("https://go.solstone.app/not-p#garbage")).use { scenario ->
+            assertInvalidPasteEntry()
             scenario.onActivity { activity ->
                 assertTrue(activity is PhoneShellActivity)
             }
@@ -86,6 +103,8 @@ class PhoneAppLinksRuntimeTest {
                 activity.startActivity(explicitView("https://go.solstone.app/p#garbage"))
             }
 
+            assertInvalidPasteEntry()
+
             scenario.onActivity { activity ->
                 assertEquals(System.identityHashCode(original), System.identityHashCode(activity))
                 assertEquals(1, createdCount.get())
@@ -100,12 +119,15 @@ class PhoneAppLinksRuntimeTest {
     @Test
     fun recreateDoesNotConsumeSurvivingViewIntentAgain() {
         ActivityScenario.launch<PhoneShellActivity>(explicitView("https://go.solstone.app/p#garbage")).use { scenario ->
+            assertInvalidPasteEntry()
             scenario.onActivity { activity ->
                 assertTrue(activity is PhoneShellActivity)
                 assertFalse(texts(activity).any { it == "Permissions" })
             }
 
             scenario.recreate()
+
+            assertInvalidPasteEntry()
 
             scenario.onActivity { activity ->
                 assertTrue(activity is PhoneShellActivity)
@@ -127,6 +149,29 @@ class PhoneAppLinksRuntimeTest {
 
     private fun explicitView(uri: String): Intent =
         implicitView(uri).setClass(application, PhoneShellActivity::class.java)
+
+    private fun assertInvalidPasteEntry() {
+        composeRule.waitUntil(15_000) {
+            composeRule.onAllNodesWithTag("pairingLinkField").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("pairingLinkField").assertIsDisplayed()
+        composeRule.onNodeWithText("enter a valid pairing link from your journal.").assertIsDisplayed()
+    }
+
+    @Test
+    fun validColdArrivalShowsPrefilledConnectWithoutCamera() {
+        val link = "https://go.solstone.app/p#0M0G86WY18004AGA0012P2G008P0M0025PGV5GYMWQV0E60H48SM8NB6EY4DXBDYXZ5FXENY04HMASW9NF6YY"
+        ActivityScenario.launch<PhoneShellActivity>(explicitView(link)).use { scenario ->
+            composeRule.waitUntil(15_000) {
+                composeRule.onAllNodesWithTag("pairingLinkField").fetchSemanticsNodes().isNotEmpty()
+            }
+            composeRule.onNodeWithTag("pairingLinkField").assertTextContains(link)
+            composeRule.onNodeWithTag("pairingConnect").assertIsEnabled()
+            scenario.onActivity { activity ->
+                assertFalse(allViews(activity).any { it.javaClass.simpleName.contains("QrPreviewView") })
+            }
+        }
+    }
 
     private fun implicitView(uri: String): Intent =
         Intent(Intent.ACTION_VIEW, Uri.parse(uri)).apply {

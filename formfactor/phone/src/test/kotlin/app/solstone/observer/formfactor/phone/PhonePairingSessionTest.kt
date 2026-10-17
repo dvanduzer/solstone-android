@@ -16,6 +16,20 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PhonePairingSessionTest {
+    @Test
+    fun externalArrivalRestoresPersistedHeldMarkWithoutStagingOrDialing() {
+        for (session in listOf(
+            PhonePairingSession.Closed,
+            PhonePairingSession.Entry(null, false, null),
+            PhonePairingSession.Scanning(null),
+        )) {
+            val step = routePhonePairIntent(PhonePairingState(session), "https://go.solstone.app/p#garbage", true)
+            assertTrue(step.state.session is PhonePairingSession.Held)
+            assertEquals("", (step.state.session as PhonePairingSession.Held).stagedCanonical)
+            assertNull(step.dial)
+        }
+    }
+
     private val canonical = "https://go.solstone.app/p#FAKE"
     private val fakeParsed = DirectPairLink(
         candidates = listOf(DirectEndpoint("10.0.0.1", 7657)),
@@ -226,26 +240,6 @@ class PhonePairingSessionTest {
     }
 
     @Test
-    fun mismatchFromHeldRequestsClearJournal() {
-        val held = PhonePairingState(
-            session = PhonePairingSession.Held(canonical, 1L, mismatchFailure = false),
-            generation = 1L,
-        )
-        val step = reducePhonePairing(held, PhonePairingEvent.Mismatch)
-        assertTrue(step.clearJournal)
-        assertEquals(held, step.state)
-        assertFalse(step.returnToShell)
-
-        val failedHeld = PhonePairingState(
-            session = PhonePairingSession.Held(canonical, 1L, mismatchFailure = true),
-            generation = 1L,
-        )
-        val stepFailed = reducePhonePairing(failedHeld, PhonePairingEvent.Mismatch)
-        assertTrue(stepFailed.clearJournal)
-        assertEquals(failedHeld, stepFailed.state)
-    }
-
-    @Test
     fun mismatchFinishedClearedReturnsToEntry() {
         val held = PhonePairingState(
             session = PhonePairingSession.Held(canonical, 1L, mismatchFailure = false),
@@ -295,7 +289,6 @@ class PhonePairingSessionTest {
         assertEquals(1L, step.state.generation)
         assertTrue(step.returnToShell)
         assertNull(step.dial)
-        assertFalse(step.clearJournal)
     }
 
     @Test
@@ -311,8 +304,7 @@ class PhonePairingSessionTest {
             assertEquals(PhonePairingSession.Closed, step.state.session)
             assertTrue(step.returnToShell)
             assertNull(step.dial)
-            assertFalse(step.clearJournal)
-            if (st.session is PhonePairingSession.Scanning) {
+                if (st.session is PhonePairingSession.Scanning) {
                 assertTrue(step.detachPreview)
             } else {
                 assertFalse(step.detachPreview)

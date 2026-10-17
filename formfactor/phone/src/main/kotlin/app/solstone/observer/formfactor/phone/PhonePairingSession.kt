@@ -35,7 +35,6 @@ sealed interface PhonePairingEvent {
     data object CloseScan : PhonePairingEvent
     data object Connect : PhonePairingEvent
     data class AttemptFinished(val generation: Long, val result: PairLinkDispatchResult) : PhonePairingEvent
-    data object Mismatch : PhonePairingEvent
     data class MismatchFinished(val generation: Long, val cleared: Boolean) : PhonePairingEvent
     data object Confirm : PhonePairingEvent
     data object Dismiss : PhonePairingEvent
@@ -45,7 +44,6 @@ sealed interface PhonePairingEvent {
 data class PhonePairingStep(
     val state: PhonePairingState,
     val dial: String? = null,
-    val clearJournal: Boolean = false,
     val detachPreview: Boolean = false,
     val returnToShell: Boolean = false,
 )
@@ -208,16 +206,6 @@ fun reducePhonePairing(state: PhonePairingState, event: PhonePairingEvent): Phon
                 PhonePairingStep(state)
             }
         }
-        PhonePairingEvent.Mismatch -> when (session) {
-            is PhonePairingSession.Held -> PhonePairingStep(
-                state = state,
-                clearJournal = true,
-            )
-            is PhonePairingSession.Closed,
-            is PhonePairingSession.Entry,
-            is PhonePairingSession.Scanning,
-            is PhonePairingSession.Attempting -> PhonePairingStep(state)
-        }
         is PhonePairingEvent.MismatchFinished -> {
             if (session is PhonePairingSession.Held && session.generation == event.generation && gen == event.generation) {
                 if (event.cleared) {
@@ -290,8 +278,18 @@ fun reducePhonePairing(state: PhonePairingState, event: PhonePairingEvent): Phon
     }
 }
 
-fun routePhonePairIntent(state: PhonePairingState, data: String?): PhonePairingStep {
+fun routePhonePairIntent(
+    state: PhonePairingState,
+    data: String?,
+    awaitingMarkConfirmation: Boolean = false,
+): PhonePairingStep {
     if (data == null) return PhonePairingStep(state)
+    if (awaitingMarkConfirmation) {
+        if (state.session is PhonePairingSession.Attempting || state.session is PhonePairingSession.Held) {
+            return PhonePairingStep(state)
+        }
+        return reducePhonePairing(state.copy(session = PhonePairingSession.Closed), PhonePairingEvent.OpenMark)
+    }
     val acceptance = acceptPairLink(data)
     return reducePhonePairing(state, PhonePairingEvent.Submit(acceptance))
 }

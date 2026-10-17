@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import app.solstone.observer.formfactor.phone.EXTRA_PHONE_ROUTE
 import app.solstone.observer.formfactor.phone.PhoneObserverScreen
 import app.solstone.observer.formfactor.phone.PhoneRouteStack
@@ -242,7 +243,7 @@ class PhoneShellActivity : ComponentActivity() {
         if (intent == null) return
         val rawData = intent.data?.toString()
         if (rawData != null) {
-            val step = routePhonePairIntent(pairingViewModel.pairingState, rawData)
+            val step = routePhonePairIntent(pairingViewModel.pairingState, rawData, isAwaitingMarkConfirmation())
             pairingViewModel.applyStep(step, container.controller, stores)
             return
         }
@@ -773,7 +774,8 @@ class PhoneShellActivity : ComponentActivity() {
                 DiagnosticLogRead.Unreadable -> "the event log couldn't be read."
                 null -> "the event log couldn't be read."
             }
-            val journalSheetOpenState = journalOpen && pairingSnapshot is PairingGraphSnapshot.Committed && journalConfirmed
+            val pairingOpen = pairingViewModel.pairingState.session !is PhonePairingSession.Closed
+            val journalSheetOpenState = journalOpen && !pairingOpen && pairingSnapshot is PairingGraphSnapshot.Committed && journalConfirmed
             val aboutFacts = remember { readAndroidAboutFacts(this) }
             var aboutSnapshotEpoch by remember { mutableStateOf(0L) }
             val aboutBlock = rememberPhoneAboutBlock(
@@ -847,6 +849,11 @@ class PhoneShellActivity : ComponentActivity() {
                 journalPaired = pairingSnapshot is PairingGraphSnapshot.Committed,
                 journalMarkPresentation = currentMarkPresentation,
                 journalSheetOpen = journalSheetOpenState,
+                pairingOpen = pairingOpen,
+                onDismissPairing = {
+                    pairingViewModel.dispatch(PhonePairingEvent.Dismiss, container.controller, stores)
+                },
+                modifier = if (pairingOpen) Modifier.clearAndSetSemantics {} else Modifier,
                 journalFacts = journalFacts,
                 journalPushEnabled = BuildConfig.PUSH_REGISTRATION,
                 journalNotificationRow = journalNotificationRow,
@@ -965,7 +972,8 @@ class PhoneShellActivity : ComponentActivity() {
                 captureWidthDp = capture.windowWidthDp,
                 technicalDetailsRequest = technicalDetailsRequest,
             )
-            if (pairingViewModel.pairingState.session !is PhonePairingSession.Closed) {
+            if (pairingOpen) {
+                PhoneTheme {
                 PhonePairingOverlay(
                     state = pairingViewModel.pairingState,
                     cameraAsk = pairingViewModel.cameraAsk,
@@ -983,7 +991,9 @@ class PhoneShellActivity : ComponentActivity() {
                     },
                     controller = container.controller,
                     stores = stores,
+                    pairingViewModel = pairingViewModel,
                 )
+                }
             }
             }
             if (journalSheetOpenState) {

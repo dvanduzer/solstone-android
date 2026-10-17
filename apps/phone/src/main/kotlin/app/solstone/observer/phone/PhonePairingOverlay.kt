@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -73,14 +72,11 @@ internal fun PhonePairingOverlay(
     dispatch: (PhonePairingEvent) -> Unit,
     controller: HarnessController,
     stores: SyncStores,
+    pairingViewModel: PhonePairingViewModel,
     modifier: Modifier = Modifier,
 ) {
     val session = state.session
     if (session is PhonePairingSession.Closed) return
-
-    BackHandler {
-        dispatch(PhonePairingEvent.Dismiss)
-    }
 
     Box(
         modifier = modifier
@@ -123,7 +119,7 @@ internal fun PhonePairingOverlay(
             }
             is PhonePairingSession.Held -> {
                 val context = LocalContext.current
-                val generation = session.generation
+                val displayedPairing = currentPairing(stores)
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -135,27 +131,20 @@ internal fun PhonePairingOverlay(
                         coordinator = stores.journalIdentityCoordinator,
                         currentPairing = { currentPairing(stores) },
                         requestMark = { requestPairingMark(stores) },
-                        onConfirmed = {
-                            dispatch(PhonePairingEvent.Dismiss)
-                        },
+                        onConfirmed = {},
                         onMismatch = {
-                            val cleared = performPhoneMismatch(stores)
+                            val cleared = displayedPairing != null &&
+                                pairingViewModel.mismatch(displayedPairing, controller, stores)
                             if (!cleared) {
-                                dispatch(PhonePairingEvent.MismatchFinished(generation, false))
                                 PairingMismatchResult.LocalFailure
                             } else {
                                 PairingMismatchResult.Disconnected
                             }
                         },
-                        onMismatchCleared = {
-                            dispatch(PhonePairingEvent.MismatchFinished(generation, true))
-                        },
+                        onMismatchCleared = {},
+                        cleanupInProgress = pairingViewModel.mismatchInProgress,
                         onYes = { presented ->
-                            val ok = performPhoneConfirm(context, stores, presented.clientCertFingerprint)
-                            if (ok) {
-                                dispatch(PhonePairingEvent.Confirm)
-                            }
-                            ok
+                            pairingViewModel.confirm(context, presented, controller, stores)
                         },
                         onHelp = {
                             context.openUrl(SUPPORT_SITE_URL)
@@ -179,6 +168,7 @@ private fun PhonePairingScanning(
 ) {
     val context = LocalContext.current
     val entry = scanEntry(hasCamera, cameraAsk)
+    var scannerStatus by remember { mutableStateOf<String?>(null) }
 
     when (entry) {
         ScanEntry.AskForCamera -> {
@@ -242,7 +232,7 @@ private fun PhonePairingScanning(
                                 controller = controller,
                                 threadLabel = "phone",
                                 onDecoded = onDecoded,
-                                status = {},
+                                status = { scannerStatus = it },
                             )
                             QrBackend.Legacy -> LegacyQrPreviewView(
                                 context = ctx,
@@ -250,12 +240,19 @@ private fun PhonePairingScanning(
                                 threadLabel = "phone",
                                 onPairingCommitted = {},
                                 onDecoded = onDecoded,
-                                status = {},
+                                status = { scannerStatus = it },
                             )
                         }
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
+                scannerStatus?.let { message ->
+                    Text(
+                        message,
+                        modifier = Modifier.align(Alignment.TopCenter).padding(16.dp),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
                 PasteLinkButton(
                     onClick = onPasteLink,
                     modifier = Modifier
@@ -290,6 +287,13 @@ private fun PhonePairingEntry(
     var linkText by remember(session.stagedCanonical) {
         mutableStateOf(session.stagedCanonical.orEmpty())
     }
+    val connect: () -> Unit = {
+        val acceptance = acceptPairLink(linkText)
+        dispatch(PhonePairingEvent.Submit(acceptance))
+        if (acceptance is PairLinkAcceptance.Accepted) {
+            dispatch(PhonePairingEvent.Connect)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -301,15 +305,14 @@ private fun PhonePairingEntry(
         TextField(
             value = linkText,
             onValueChange = { linkText = it },
+            label = { Text("pairing link") },
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp)
                 .testTag("pairingLinkField"),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(
-                onDone = {
-                    dispatch(PhonePairingEvent.Submit(acceptPairLink(linkText)))
-                },
+                onDone = { connect() },
             ),
             singleLine = true,
         )
@@ -333,23 +336,22 @@ private fun PhonePairingEntry(
                 )
             }
         }
-        if (session.stagedCanonical != null) {
-            Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = {
-                    val acceptance = acceptPairLink(linkText)
-                    dispatch(PhonePairingEvent.Submit(acceptance))
-                    if (acceptance is PairLinkAcceptance.Accepted) {
-                        dispatch(PhonePairingEvent.Connect)
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .testTag("pairingConnect"),
-            ) {
-                Text("connect")
-            }
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = connect,
+            enabled = linkText.isNotBlank(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .testTag("pairingConnect"),
+        ) {
+            Text("connect")
+        }
+        OutlinedButton(
+            onClick = { dispatch(PhonePairingEvent.OpenScan) },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("pairingScan"),
+        ) {
+            Text("scan a code")
         }
     }
 }

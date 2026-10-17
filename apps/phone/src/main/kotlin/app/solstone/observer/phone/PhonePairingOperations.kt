@@ -10,29 +10,59 @@ import android.net.Uri
 import app.solstone.core.identity.GraphMutationResult
 import app.solstone.core.identity.PairingGeneration
 import app.solstone.core.identity.PairingGraphSnapshot
+import app.solstone.core.identity.PairingPublisher
+import app.solstone.core.identity.JournalConfirmationPolicy
+import app.solstone.core.identity.awaitingMarkConfirmation
 import app.solstone.core.pl.PlHttpClient
 import app.solstone.core.pl.openPairingClient
 import app.solstone.core.sources.PHONE_STREAM
 import app.solstone.platform.pl.transport.conscrypt.openAuthenticatedLeaseClient
 import app.solstone.platform.work.SyncScheduler
 import app.solstone.platform.work.SyncStores
+import app.solstone.platform.work.JournalRevokeOutcome
 import app.solstone.platform.work.confirmCurrentJournal
 import app.solstone.platform.work.forgetPushAfterCleared
 import app.solstone.platform.work.revokeThisDeviceOnJournal
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 
-internal suspend fun performPhoneMismatch(stores: SyncStores): Boolean {
-    val cleared = leaveJournal(
-        dispatcher = Dispatchers.IO,
-        revoke = { revokeThisDeviceOnJournal(stores.publisher) },
-        forget = stores.publisher::forget,
+internal suspend fun performPhoneMismatch(stores: SyncStores, expected: PairingGeneration): Boolean =
+    clearMismatchedPairing(
+        publisher = stores.publisher,
+        expected = expected,
+        revoke = { revokeThisDeviceOnJournal(stores.publisher, expectedPairing = expected) },
+        afterCleared = { forgetPushAfterCleared(stores) },
+        canClear = {
+            awaitingMarkConfirmation(JournalConfirmationPolicy.consults, stores.publisher.currentSnapshot(), stores.journalConfirmationStore)
+        },
         log = PhoneDiagLog::appendRaw,
     ) is GraphMutationResult.Cleared
-    if (cleared) {
-        forgetPushAfterCleared(stores)
-    }
-    return cleared
-}
+
+internal suspend fun clearMismatchedPairing(
+    publisher: PairingPublisher,
+    expected: PairingGeneration,
+    revoke: () -> JournalRevokeOutcome,
+    afterCleared: () -> Unit,
+    canClear: () -> Boolean,
+    log: (String) -> Unit,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
+): GraphMutationResult = leaveJournal(
+    dispatcher = dispatcher,
+    revoke = revoke,
+    forget = {
+        publisher.withMutationBoundary {
+            val current = publisher.currentSnapshot() as? PairingGraphSnapshot.Committed
+            if (current?.pairing != expected || !canClear()) {
+                GraphMutationResult.Conflict("pairing changed")
+            } else {
+                publisher.forget().also { result ->
+                    if (result is GraphMutationResult.Cleared) afterCleared()
+                }
+            }
+        }
+    },
+    log = log,
+)
 
 internal fun performPhoneConfirm(
     context: Context,

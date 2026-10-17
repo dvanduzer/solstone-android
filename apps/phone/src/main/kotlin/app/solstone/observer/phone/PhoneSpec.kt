@@ -56,6 +56,7 @@ val phoneSpec = FormFactorSpec(
     },
     pairingAccessoryFactory = { context, onConfirmed ->
         val stores = syncStores(context)
+        val displayedPairing = currentPairing(stores)
         createPhonePairingMarkView(
             context = context,
             coordinator = stores.journalIdentityCoordinator,
@@ -63,7 +64,7 @@ val phoneSpec = FormFactorSpec(
             currentPairing = { currentPairing(stores) },
             requestMark = { requestPairingMark(stores) },
             onMismatch = {
-                val cleared = performPhoneMismatch(stores)
+                val cleared = displayedPairing != null && performPhoneMismatch(stores, displayedPairing)
                 if (cleared) {
                     PairingMismatchResult.Disconnected
                 } else {

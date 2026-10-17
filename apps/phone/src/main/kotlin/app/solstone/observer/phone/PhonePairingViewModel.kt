@@ -17,7 +17,10 @@ import app.solstone.observer.formfactor.phone.reducePhonePairing
 import app.solstone.observer.harness.HarnessController
 import app.solstone.observer.scaffold.CameraAsk
 import app.solstone.platform.work.SyncStores
+import app.solstone.core.identity.PairingGraphSnapshot
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -26,6 +29,68 @@ class PhonePairingViewModel : ViewModel() {
         private set
 
     var cameraAsk by mutableStateOf(CameraAsk.NotAsked)
+    internal enum class ActionKind { MISMATCH, CONFIRM }
+    private data class OwnerAction(val kind: ActionKind, val task: Deferred<Boolean>)
+    private var ownerAction by mutableStateOf<OwnerAction?>(null)
+    val mismatchInProgress: Boolean get() = ownerAction?.kind == ActionKind.MISMATCH
+
+    suspend fun mismatch(
+        expected: app.solstone.core.identity.PairingGeneration,
+        controller: HarnessController,
+        stores: SyncStores,
+    ): Boolean = runOwnerAction(ActionKind.MISMATCH, expected, controller, stores) {
+        performPhoneMismatch(stores, expected)
+    }
+
+    suspend fun confirm(
+        context: android.content.Context,
+        expected: app.solstone.core.identity.PairingGeneration,
+        controller: HarnessController,
+        stores: SyncStores,
+    ): Boolean = runOwnerAction(ActionKind.CONFIRM, expected, controller, stores) {
+        withContext(Dispatchers.IO) { performPhoneConfirm(context, stores, expected.clientCertFingerprint) }
+    }
+
+    internal suspend fun runOwnerAction(
+        kind: ActionKind,
+        expected: app.solstone.core.identity.PairingGeneration,
+        controller: HarnessController,
+        stores: SyncStores,
+        operation: suspend () -> Boolean,
+    ): Boolean = withContext(Dispatchers.Main) {
+        // Admission is on Main for both actions, including callbacks begun on IO.
+        if (ownerAction != null) return@withContext false
+        val held = pairingState.session as? PhonePairingSession.Held ?: return@withContext false
+        if (currentPairing(stores) != expected) return@withContext false
+        val task = viewModelScope.async {
+            val succeeded = operation()
+            stores.publisher.withMutationBoundary {
+                val currentHeld = pairingState.session as? PhonePairingSession.Held
+                val snapshot = stores.publisher.currentSnapshot()
+                val current = (snapshot as? PairingGraphSnapshot.Committed)?.pairing
+                if (succeeded && currentHeld != null) {
+                    when (kind) {
+                        ActionKind.MISMATCH -> if (snapshot is PairingGraphSnapshot.Absent) {
+                            performDispatch(PhonePairingEvent.MismatchFinished(currentHeld.generation, true), controller, stores)
+                        }
+                        ActionKind.CONFIRM -> if (current == expected) {
+                            performDispatch(PhonePairingEvent.Confirm, controller, stores)
+                        }
+                    }
+                } else if (kind == ActionKind.MISMATCH) {
+                    performDispatch(PhonePairingEvent.MismatchFinished(held.generation, false), controller, stores)
+                }
+            }
+            succeeded
+        }
+        ownerAction = OwnerAction(kind, task)
+        task.invokeOnCompletion {
+            viewModelScope.launch(Dispatchers.Main) {
+                if (ownerAction?.task === task) ownerAction = null
+            }
+        }
+        task.await()
+    }
 
     fun dispatch(
         event: PhonePairingEvent,
@@ -67,16 +132,6 @@ class PhonePairingViewModel : ViewModel() {
                 val result = controller.dispatchPairLink(dial)
                 withContext(Dispatchers.Main) {
                     dispatch(PhonePairingEvent.AttemptFinished(generation, result), controller, stores)
-                }
-            }
-        }
-
-        if (step.clearJournal) {
-            val generation = step.state.generation
-            viewModelScope.launch(Dispatchers.IO) {
-                val cleared = performPhoneMismatch(stores)
-                withContext(Dispatchers.Main) {
-                    dispatch(PhonePairingEvent.MismatchFinished(generation, cleared), controller, stores)
                 }
             }
         }

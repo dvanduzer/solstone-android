@@ -5,6 +5,7 @@ package app.solstone.platform.work
 
 import app.solstone.core.identity.PairingLease
 import app.solstone.core.identity.PairingPublisher
+import app.solstone.core.identity.PairingGeneration
 import app.solstone.core.pl.ClientRevokeResult
 import app.solstone.core.pl.DirectEndpoint
 import app.solstone.core.pl.revokeClient
@@ -40,9 +41,11 @@ fun revokeThisDeviceOnJournal(
     openRelay: (PairingLease.Relay) -> ConscryptPlHttpClient = { lease ->
         openRelaySyncClient(lease.relayOrigin, lease.instanceId, lease.deviceToken, lease.credential)
     },
+    expectedPairing: PairingGeneration? = null,
 ): JournalRevokeOutcome {
     val snapshot = publisher.currentSnapshot() as? app.solstone.core.identity.PairingGraphSnapshot.Committed
         ?: return JournalRevokeOutcome.UNREACHED
+    if (expectedPairing != null && snapshot.pairing != expectedPairing) return JournalRevokeOutcome.UNREACHED
     var client: ConscryptPlHttpClient? = null
     return try {
         val opened = app.solstone.core.pl.openPairingClient(publisher) { lease ->

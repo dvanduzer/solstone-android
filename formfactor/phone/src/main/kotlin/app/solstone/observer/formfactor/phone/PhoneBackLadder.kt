@@ -9,7 +9,7 @@ import androidx.compose.runtime.Composable
 import kotlinx.coroutines.flow.collect
 
 /**
- * Installs the three back handlers unconditionally. Rung 3 is the absence of an
+ * Installs the back handlers unconditionally. The final rung is the absence of an
  * enabled handler. This composable instantiates no drawer, sheet, popup, or
  * Material surface.
  */
@@ -20,17 +20,22 @@ fun PhoneBackLadder(
     widthClass: WidthClass,
     onClosePane: (PhonePane) -> Unit,
     onPopDetail: () -> Unit,
+    pairingOpen: Boolean = false,
+    onDismissPairing: () -> Unit = {},
 ) {
     val outcome = resolveBack(paneStates, detailStack, widthClass)
-    PredictiveBackHandler(enabled = outcome.closesPane(PhonePane.JOURNAL)) { progress ->
+    PredictiveBackHandler(enabled = !pairingOpen && outcome.closesPane(PhonePane.JOURNAL)) { progress ->
         progress.collect()
         onClosePane(PhonePane.JOURNAL)
     }
-    PredictiveBackHandler(enabled = outcome.closesPane(PhonePane.STATUS)) { progress ->
+    PredictiveBackHandler(enabled = !pairingOpen && outcome.closesPane(PhonePane.STATUS)) { progress ->
         progress.collect()
         onClosePane(PhonePane.STATUS)
     }
-    BackHandler(enabled = outcome.popsDetail) {
+    BackHandler(enabled = !pairingOpen && outcome.popsDetail) {
         onPopDetail()
+    }
+    BackHandler(enabled = pairingOpen) {
+        onDismissPairing()
     }
 }
