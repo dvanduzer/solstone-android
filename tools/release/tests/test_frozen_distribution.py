@@ -4,8 +4,7 @@
 
 """Executable contract test for the frozen-artifact HITL wrapper.
 
-Firebase App Distribution was retired 2026-09-18
-(records/decisions/260918-vpe-firebase-app-distribution-retired-direct-apk-is-the-only-tester-channel.md);
+Firebase App Distribution was retired 2026-09-18;
 the dist-phone-frozen/firebase-phone-frozen/android-host-dist-phone-frozen
 targets these tests used to cover no longer exist. What remains is the
 real-hardware HITL gate on a frozen artifact, still real and still load-bearing.
