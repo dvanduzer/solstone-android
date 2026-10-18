@@ -10,7 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- if you open solstone before setting up a journal, you can now open the setup page, send yourself its link, or connect a journal you already have. sources you turn on can work before pairing; what's on this device waits until you connect a journal.
+- if you open solstone before setting up a journal, you can now open the setup page, send yourself its link, or connect a journal you already have. sources you turn on can work before you connect a journal, and what they take in waits on this device until you do.
 
 ### Changed
 
