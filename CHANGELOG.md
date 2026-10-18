@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- before you've connected a journal, "set one up" is now the main button, and "i already have one" explains what to scan before android asks for the camera.
+
 ## [2.1.25] - 2026-10-17
 
 ### Added

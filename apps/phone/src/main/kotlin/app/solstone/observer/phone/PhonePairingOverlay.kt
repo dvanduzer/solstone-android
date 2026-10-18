@@ -32,7 +32,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -95,12 +94,7 @@ internal fun PhonePairingOverlay(
                     hasCamera = hasCamera,
                     onAskForCamera = onAskForCamera,
                     onScannerNeedsCamera = onScannerNeedsCamera,
-                    onDecoded = { raw ->
-                        dispatch(PhonePairingEvent.Submit(acceptPairLink(raw)))
-                    },
-                    onPasteLink = {
-                        dispatch(PhonePairingEvent.CloseScan)
-                    },
+                    dispatch = dispatch,
                     controller = controller,
                 )
             }
@@ -161,23 +155,51 @@ internal fun PhonePairingOverlay(
 }
 
 @Composable
-private fun PhonePairingScanning(
+internal fun PhonePairingScanning(
     cameraAsk: CameraAsk,
     hasCamera: Boolean,
     onAskForCamera: () -> Unit,
     onScannerNeedsCamera: () -> Unit,
-    onDecoded: (String) -> Unit,
-    onPasteLink: () -> Unit,
+    dispatch: (PhonePairingEvent) -> Unit,
     controller: HarnessController,
 ) {
     val context = LocalContext.current
     val entry = scanEntry(hasCamera, cameraAsk)
     var scannerStatus by remember { mutableStateOf<String?>(null) }
+    val onDecoded = { raw: String ->
+        dispatch(PhonePairingEvent.Submit(acceptPairLink(raw)))
+    }
+    val onPasteLink = {
+        dispatch(PhonePairingEvent.CloseScan)
+    }
 
     when (entry) {
         ScanEntry.AskForCamera -> {
-            LaunchedEffect(Unit) {
-                onAskForCamera()
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = "on your journal's computer, open \"network\" and choose \"pair a device\". then scan the code it shows.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = onAskForCamera,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("pairingScanCode"),
+                ) {
+                    Text("scan a code")
+                }
+                Spacer(Modifier.height(16.dp))
+                PasteLinkButton(
+                    onClick = onPasteLink,
+                )
             }
         }
         ScanEntry.AwaitAnswer -> {

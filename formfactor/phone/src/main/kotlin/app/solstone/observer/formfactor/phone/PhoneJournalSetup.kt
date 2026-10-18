@@ -9,11 +9,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+
+internal enum class JournalSetupButtonVariant { Filled, Outlined }
+
+internal val JournalSetupButtonVariantKey = SemanticsPropertyKey<JournalSetupButtonVariant>(
+    name = "JournalSetupButtonVariant",
+)
 
 @Composable
 fun PhoneJournalSetup(
@@ -36,25 +45,28 @@ fun PhoneJournalSetup(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp)
-                .testTag("journalSetupSetOneUp"),
+                .testTag("journalSetupSetOneUp")
+                .semantics { this[JournalSetupButtonVariantKey] = JournalSetupButtonVariant.Filled },
         ) {
             Text("set one up")
         }
-        Button(
+        OutlinedButton(
             onClick = onSendLink,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp)
-                .testTag("journalSetupSendLink"),
+                .testTag("journalSetupSendLink")
+                .semantics { this[JournalSetupButtonVariantKey] = JournalSetupButtonVariant.Outlined },
         ) {
             Text("send yourself the link")
         }
-        Button(
+        OutlinedButton(
             onClick = onAlreadyHaveOne,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp)
-                .testTag("journalSetupAlreadyHave"),
+                .testTag("journalSetupAlreadyHave")
+                .semantics { this[JournalSetupButtonVariantKey] = JournalSetupButtonVariant.Outlined },
         ) {
             Text("i already have one")
         }
