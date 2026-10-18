@@ -6,7 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.25] - 2026-10-17
+
+### Added
+
 - if you open solstone before setting up a journal, you can now open the setup page, send yourself its link, or connect a journal you already have. sources you turn on can work before pairing; what's on this device waits until you connect a journal.
+
+### Changed
+
 - pairing links now open the pairing screen. you can paste a link as well as scan a code, and if the mark doesn't match, you can scan again or get help.
 
 ## [2.1.24] - 2026-10-16
