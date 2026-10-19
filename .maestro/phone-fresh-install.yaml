@@ -39,14 +39,32 @@ appId: app.solstone.observer.phone
       text: "i already have one"
     timeout: 20000
 
-# 🔴 The A1 path. Tapping the welcome card's main call to action (welcomeConnectJournal, not the journal mark pill) must reach the system camera prompt —
-# not a camera.
+# 🔴 The A1 path. Connecting a journal you already have must reach the system camera prompt —
+# not a camera. Since 2.1.26 (`74028cd`, H8) "set one up" is the main button and "i already have
+# one" first explains what to scan, with nothing asked yet; the prompt comes only from "scan a
+# code". So this leg proves both: the explainer is up with no system prompt over it, and the
+# prompt follows the tap. (Before H8 the tap went straight to the prompt; against H8 the old wait
+# could be met by the deck's own "camera" card behind the overlay, with no prompt.)
 - tapOn:
     text: "i already have one"
 
 - extendedWaitUntil:
     visible:
-      text: ".*(take pictures|Camera|camera).*"
+      text: ".*then scan the code it shows.*"
+    timeout: 15000
+- assertNotVisible:
+    text: ".*take pictures.*"
+- assertNotVisible:
+    text: ".*(Don.t allow|DENY|Deny).*"
+- takeScreenshot: artifacts/hitl/fresh-install-explainer-before-camera-ask
+- tapOn:
+    text: "scan a code"
+
+# Only the system dialog's own words count here: a bare "camera" is also the deck's source card
+# and our camera-off sentence, so it could be met with no prompt at all.
+- extendedWaitUntil:
+    visible:
+      text: ".*(take pictures|Don.t allow|DENY|Deny).*"
     timeout: 15000
 
 # ⛔ And the platform's refusal must never reach the owner as platform words. Declining lands on
