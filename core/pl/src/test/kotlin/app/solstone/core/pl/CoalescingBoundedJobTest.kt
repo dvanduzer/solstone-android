@@ -3,13 +3,23 @@
 
 package app.solstone.core.pl
 
+import java.util.concurrent.AbstractExecutorService
+import java.util.concurrent.Callable
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
+import java.util.concurrent.RunnableFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
+// A submit that lands while a drain is in flight only replaces the pending snapshot: the drain
+// runs it with the task it started with, and two submits can coalesce into one run. Tests that
+// need every snapshot to run therefore submit one task that branches on the snapshot, as the
+// coordinators do, and wait for a run to start before submitting the snapshot that must follow it.
 class CoalescingBoundedJobTest {
 
     @Test
@@ -170,19 +180,17 @@ class CoalescingBoundedJobTest {
         val secondLatch = CountDownLatch(1)
         val ran = mutableListOf<Int>()
 
-        runner.submit(1) { value, _ ->
+        val task: (Int, Long) -> Unit = { value, _ ->
             synchronized(ran) { ran += value }
-            firstLatch.countDown()
+            if (value == 1) firstLatch.countDown() else secondLatch.countDown()
         }
+        runner.submit(1, task)
 
-        firstLatch.await(3, TimeUnit.SECONDS)
+        kotlin.test.assertTrue(firstLatch.await(3, TimeUnit.SECONDS))
         // Submit second task right as first completes/exits
-        runner.submit(2) { value, _ ->
-            synchronized(ran) { ran += value }
-            secondLatch.countDown()
-        }
+        runner.submit(2, task)
 
-        secondLatch.await(3, TimeUnit.SECONDS)
+        kotlin.test.assertTrue(secondLatch.await(3, TimeUnit.SECONDS))
         executor.shutdown()
         executor.awaitTermination(3, TimeUnit.SECONDS)
 
@@ -193,7 +201,7 @@ class CoalescingBoundedJobTest {
 
     @Test
     fun onJobEndedFiresOncePerDrainedSnapshotOnSuccessTimeoutAndThrow() {
-        val executor = Executors.newCachedThreadPool()
+        val executor = TestTimedExecutor()
         val events = mutableListOf<String>()
         val successLatch = CountDownLatch(1)
         val timeoutLatch = CountDownLatch(1)
@@ -216,19 +224,28 @@ class CoalescingBoundedJobTest {
             },
         )
 
-        runner.submit("success") { _, _ -> }
+        val timeoutStarted = CountDownLatch(1)
+        val hangLatch = CountDownLatch(1)
+        val task: (String, Long) -> Unit = { snap, _ ->
+            when (snap) {
+                "timeout" -> {
+                    timeoutStarted.countDown()
+                    hangLatch.await(3, TimeUnit.SECONDS)
+                }
+                "throw" -> throw RuntimeException("task failed")
+            }
+        }
+
+        runner.submit("success", task)
         kotlin.test.assertTrue(successLatch.await(3, TimeUnit.SECONDS))
 
-        val hangLatch = CountDownLatch(1)
-        runner.submit("timeout") { _, _ ->
-            hangLatch.await(3, TimeUnit.SECONDS)
-        }
+        runner.submit("timeout", task)
+        kotlin.test.assertTrue(timeoutStarted.await(3, TimeUnit.SECONDS))
+        executor.timeOutUnfinished()
         kotlin.test.assertTrue(timeoutLatch.await(3, TimeUnit.SECONDS))
         hangLatch.countDown()
 
-        runner.submit("throw") { _, _ ->
-            throw RuntimeException("task failed")
-        }
+        runner.submit("throw", task)
         kotlin.test.assertTrue(throwLatch.await(3, TimeUnit.SECONDS))
 
         executor.shutdown()
@@ -306,12 +323,19 @@ class CoalescingBoundedJobTest {
             },
         )
 
+        val timedOutStarted = CountDownLatch(1)
         val timedOutBlocker = CountDownLatch(1)
-        runner1.submit("timedOut") { _, _ ->
-            timedOutBlocker.await(3, TimeUnit.SECONDS)
+        val task1: (String, Long) -> Unit = { snap, _ ->
+            if (snap == "timedOut") {
+                timedOutStarted.countDown()
+                timedOutBlocker.await(3, TimeUnit.SECONDS)
+            }
         }
-        // Submit successor while timedOut is waiting
-        runner1.submit("successor") { _, _ -> }
+        runner1.submit("timedOut", task1)
+        // Submit successor while timedOut is waiting. Submitted any earlier, it would replace
+        // timedOut before the drain took it, and only successor would run.
+        kotlin.test.assertTrue(timedOutStarted.await(3, TimeUnit.SECONDS))
+        runner1.submit("successor", task1)
 
         kotlin.test.assertTrue(secondEnded.await(3, TimeUnit.SECONDS))
         timedOutBlocker.countDown()
@@ -358,6 +382,44 @@ class CoalescingBoundedJobTest {
 
         synchronized(endedEvents) {
             assertEquals(listOf("first", "second"), endedEvents)
+        }
+    }
+}
+
+/**
+ * Runs tasks on real threads, but a bounded wait on one of its futures ends only when the task
+ * finishes or the test calls [timeOutUnfinished], so no outcome depends on how fast the host is.
+ */
+private class TestTimedExecutor : AbstractExecutorService() {
+    private val delegate = Executors.newCachedThreadPool()
+    private val tasks = ConcurrentLinkedQueue<TestTimedTask<*>>()
+
+    fun timeOutUnfinished() {
+        tasks.filterNot { it.isDone }.forEach { it.timeOut() }
+    }
+
+    override fun <T> newTaskFor(callable: Callable<T>): RunnableFuture<T> =
+        TestTimedTask(callable).also { tasks += it }
+
+    override fun execute(command: Runnable) = delegate.execute(command)
+    override fun shutdown() = delegate.shutdown()
+    override fun shutdownNow(): MutableList<Runnable> = delegate.shutdownNow()
+    override fun isShutdown(): Boolean = delegate.isShutdown
+    override fun isTerminated(): Boolean = delegate.isTerminated
+    override fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean =
+        delegate.awaitTermination(timeout, unit)
+
+    private class TestTimedTask<T>(callable: Callable<T>) : FutureTask<T>(callable) {
+        private val settled = CountDownLatch(1)
+
+        fun timeOut() = settled.countDown()
+
+        override fun done() = settled.countDown()
+
+        override fun get(timeout: Long, unit: TimeUnit): T {
+            check(settled.await(10, TimeUnit.SECONDS)) { "task neither finished nor was timed out" }
+            if (!isDone) throw TimeoutException()
+            return get()
         }
     }
 }
