@@ -835,12 +835,12 @@ class PhoneShellActivity : ComponentActivity() {
                 },
                 onGrantPermissions = { sourceId -> routePermissionRequest(sourceId, priorWishFor(sourceId)) },
                 onSetOneUp = {
-                    openUrl("https://solstone.app/install")
+                    openUrl("https://solstone.app/install#start")
                 },
                 onSendLink = {
                     val sendIntent = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, "https://solstone.app/install")
+                        putExtra(Intent.EXTRA_TEXT, "https://solstone.app/install#start")
                     }
                     startActivity(Intent.createChooser(sendIntent, null))
                 },
