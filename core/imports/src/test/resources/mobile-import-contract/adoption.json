@@ -1,0 +1,12 @@
+{
+  "authority_repository": "https://github.com/solpbc/solstone-journal",
+  "authority_commit": "fcbc0395f1151309cec5dd8292e9ac3fdcf056cf",
+  "authority_note": "Pinned to the commit in solpbc/solstone-journal#394 before it merges; re-pin to the merge commit once it lands.",
+  "contract": "mobile-import-v1",
+  "files": [
+    { "path": "contracts/mobile-import/v1.schema.json", "sha256": "7c98db20b74e4ea88390839098b26d0ec187d4d04a5cc04ce9ae3d8e049f18f2" },
+    { "path": "contracts/mobile-import/v1.vectors.json", "sha256": "af5ff25a090b207cf4b8a6ec0492aaa2c61b02160fd7943562edb38f0e8fd057" }
+  ],
+  "resources": ["v1.schema.json", "v1.vectors.json"],
+  "owner": "app.solstone.core.imports.MobileImportContract"
+}
